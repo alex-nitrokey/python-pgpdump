@@ -10,12 +10,13 @@ from .utils import (PgpdumpException, get_int2, get_int4, get_mpi,
 class Packet(object):
     '''The base packet object containing various fields pulled from the packet
     header as well as a slice of the packet data.'''
-    def __init__(self, raw, name, new, data):
+    def __init__(self, raw, name, new, data, original_data):
         self.raw = raw
         self.name = name
         self.new = new
         self.length = len(data)
         self.data = data
+        self.original_data = original_data
 
         # now let subclasses work their magic
         self.parse()
@@ -851,12 +852,14 @@ def construct_packet(data, header_start):
     # data consumed to create new packet, consists of header and data
     consumed = 0
     packet_data = bytearray()
+    original_data = bytearray()
     while (True):
         consumed += data_offset
 
         data_start = header_start + data_offset
-        header_start = data_start + data_length
-        packet_data += data[data_start:header_start]
+        next_header_start = data_start + data_length
+        original_data += data[header_start:next_header_start]
+        packet_data += data[data_start:next_header_start]
         consumed += data_length
 
         # The new format might encode data with Partial Body Length headers.
@@ -864,8 +867,9 @@ def construct_packet(data, header_start):
         # last header of a packet is not a Partial Body Length header.
         if partial:
             data_offset, data_length, partial = new_tag_length(
-                    data, header_start)
+                    data, next_header_start)
+            header_start = next_header_start
         else:
             break
-    packet = PacketType(tag, name, new, packet_data)
+    packet = PacketType(tag, name, new, packet_data, original_data)
     return (consumed, packet)
