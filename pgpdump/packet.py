@@ -420,6 +420,10 @@ class PublicKeyPacket(Packet, AlgoLookup):
             self.prime, offset = get_mpi(self.data, offset)
             self.group_gen, offset = get_mpi(self.data, offset)
             self.key_value, offset = get_mpi(self.data, offset)
+        elif self.raw_pub_algorithm == 18:
+            self.pub_algorithm_type = "ecc"
+        elif self.raw_pub_algorithm == 19:
+            self.pub_algorithm_type = "ecdsa"
         elif 100 <= self.raw_pub_algorithm <= 110:
             # Private/Experimental algorithms, just move on
             pass
