@@ -337,6 +337,9 @@ class PublicKeyPacket(Packet, AlgoLookup):
         self.group_order = None
         self.group_gen = None
         self.key_value = None
+
+        self.bitlen = None
+
         super(PublicKeyPacket, self).__init__(*args, **kwargs)
 
     def parse(self):
@@ -408,6 +411,7 @@ class PublicKeyPacket(Packet, AlgoLookup):
             self.exponent, offset = get_mpi(self.data, offset)
             # the length of the modulus in bits
             self.modulus_bitlen = int(ceil(log(self.modulus, 2)))
+            self.bitlen = self.modulus_bitlen
         elif self.raw_pub_algorithm == 17:
             self.pub_algorithm_type = "dsa"
             # p, q, g, y
@@ -415,6 +419,8 @@ class PublicKeyPacket(Packet, AlgoLookup):
             self.group_order, offset = get_mpi(self.data, offset)
             self.group_gen, offset = get_mpi(self.data, offset)
             self.key_value, offset = get_mpi(self.data, offset)
+            # This isn't always accurate, but you can round to the nearest power of 2 yourself.
+            self.bitlen = int(ceil(log(self.key_value, 2)))
         elif self.raw_pub_algorithm in (16, 20):
             self.pub_algorithm_type = "elg"
             # p, g, y
