@@ -49,11 +49,27 @@ class AlgoLookup(object):
         21: "Diffie-Hellman",
     }
 
+    # OID stuff? Not sure if it should be here, but why not?
+    # TODO: Add more OIDS.
+    oids = {
+        b'2B81040023': ("NIST P-521", 521),
+        b'2B81040022': ("NIST P-384", 384),
+        b'2A8648CE3D030107': ("NIST P-256", 256),
+        b'2B240303020801010D': ("Brainpool P512 r1", 512),
+        b'2B240303020801010B': ("Brainpool P384 r1", 384),
+        b'2B2403030208010107': ("Brainpool P256 r1", 256),
+        b'2B06010401DA470F01': ("Curve 25519", None)
+    }
+
     @classmethod
     def lookup_pub_algorithm(cls, alg):
         if 100 <= alg <= 110:
             return "Private/Experimental algorithm"
         return cls.pub_algorithms.get(alg, "Unknown")
+
+    @classmethod
+    def lookup_oid(cls, oid):
+        return cls.oids.get(oid, ("Unknown", None))
 
     hash_algorithms = {
         1:  "MD5",
@@ -340,6 +356,12 @@ class PublicKeyPacket(Packet, AlgoLookup):
 
         self.bitlen = None
 
+        # ECC information
+        self.raw_oid = None
+        self.raw_oid_length = None
+
+        self.oid = None
+
         super(PublicKeyPacket, self).__init__(*args, **kwargs)
 
     def parse(self):
@@ -429,14 +451,34 @@ class PublicKeyPacket(Packet, AlgoLookup):
             self.key_value, offset = get_mpi(self.data, offset)
         elif self.raw_pub_algorithm == 18:
             self.pub_algorithm_type = "ecc"
+            offset = self.parse_oid_data(offset)
         elif self.raw_pub_algorithm == 19:
             self.pub_algorithm_type = "ecdsa"
+            offset = self.parse_oid_data(offset)
+        elif self.raw_pub_algorithm == 22:
+            self.pub_algorithm_type = "curve25519"
+            offset = self.parse_oid_data(offset)
         elif 100 <= self.raw_pub_algorithm <= 110:
             # Private/Experimental algorithms, just move on
             pass
         else:
             raise PgpdumpException("Unsupported public key algorithm %d" %
                     self.raw_pub_algorithm)
+
+        return offset
+
+    def parse_oid_data(self, offset):
+        oid_length = self.data[offset]
+        offset += 1
+
+        oid = get_hex_data(self.data, offset, oid_length)
+        offset += oid_length
+        self.raw_oid = oid
+        self.raw_oid_length = oid_length
+
+        oid_value = self.lookup_oid(self.raw_oid)
+        self.oid = oid_value[0]
+        self.bitlen = oid_value[1]
 
         return offset
 
