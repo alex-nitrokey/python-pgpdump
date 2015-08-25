@@ -2,6 +2,7 @@ from datetime import datetime, timedelta
 import hashlib
 from math import ceil, log
 import re
+import zlib
 
 from .utils import (PgpdumpException, get_int2, get_int4, get_mpi,
         get_key_id, get_hex_data, get_int_bytes, pack_data)
@@ -191,6 +192,9 @@ class SignaturePacket(Packet, AlgoLookup):
         self.key_id = None
         self.hash2 = None
         self.subpackets = []
+
+        self.sig_data = None
+
         super(SignaturePacket, self).__init__(*args, **kwargs)
 
     def parse(self):
@@ -259,6 +263,8 @@ class SignaturePacket(Packet, AlgoLookup):
 
             self.hash2 = self.data[offset:offset + 2]
             offset += 2
+
+            self.sig_data, offset = get_mpi(self.data, offset)
         else:
             raise PgpdumpException("Unsupported signature packet, version %d" %
                     self.sig_version)
@@ -787,6 +793,28 @@ class PublicKeyEncryptedSessionKeyPacket(Packet, AlgoLookup):
                 self.length)
 
 
+class CompressedDataPacket(Packet):
+    def __init__(self, *args, **kwargs):
+        self.decompressed_data = None
+        self.raw_compression_algo = None
+        super(CompressedDataPacket, self).__init__(*args, **kwargs)
+
+    def parse(self):
+        offset = super(CompressedDataPacket, self).parse()
+
+        self.raw_compression_algo = self.data[offset]
+        offset += 1
+
+        if self.raw_compression_algo == 1:
+            # ZLIB DEFLATE
+            self.decompressed_data = zlib.decompress(self.data[offset:offset+self.length], -zlib.MAX_WBITS)
+
+    def __repr__(self):
+        return "<%s: Algo %s, length %s>" % (
+            self.__class__.__name__, self.raw_compression_algo, self.length
+        )
+
+
 TAG_TYPES = {
     # (Name, PacketType) tuples
     0:  ("Reserved", None),
@@ -798,7 +826,7 @@ TAG_TYPES = {
     5:  ("Secret Key Packet", SecretKeyPacket),
     6:  ("Public Key Packet", PublicKeyPacket),
     7:  ("Secret Subkey Packet", SecretSubkeyPacket),
-    8:  ("Compressed Data Packet", None),
+    8:  ("Compressed Data Packet", CompressedDataPacket),
     9:  ("Symmetrically Encrypted Data Packet", None),
     10: ("Marker Packet", None),
     11: ("Literal Data Packet", None),
