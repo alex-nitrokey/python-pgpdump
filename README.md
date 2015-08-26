@@ -1,5 +1,9 @@
 # python-pgpdump: a Python library for parsing PGP packets
 
+[![Build Status](https://travis-ci.org/SkierPGP/python-pgpdump.svg?branch=master)](https://travis-ci.org/SkierPGP/python-pgpdump)
+[![Downloads Weekly](https://img.shields.io/pypi/dw/pgpdump3)](https://img.shields.io/pypi/dw/pgpdump3)
+
+
 This is based on the C version published at:
 http://www.mew.org/~kazu/proj/pgpdump/
 

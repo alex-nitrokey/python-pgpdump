@@ -1,4 +1,4 @@
-from distutils.core import setup
+from setuptools import setup
 
 from pgpdump import __version__, __author__
 
