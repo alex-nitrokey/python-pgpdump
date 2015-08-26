@@ -3,6 +3,8 @@
 This is based on the C version published at:
 http://www.mew.org/~kazu/proj/pgpdump/
 
+This version is a fork of the version by Dan McGee, dropping Python 2 compatibility.
+
 The intent here is not on completeness, as we don't currently decode every
 packet type, but on being able to do what people actually have to 95% of the
 time. Currently supported things include:
@@ -14,5 +16,4 @@ time. Currently supported things include:
 * ASCII-armor decoding and CRC check
 * Compressed packet decompression automatically
 
-A single codebase with dependencies on only the standard python library is
-compatible across Python 2.6, 2.7, and 3.2+, as well as with PyPy 1.8+.
+This package is designed for Python 3 only. 
