@@ -41,6 +41,8 @@ class AsciiData(BinaryData):
     first PGP magic header and extracts the data contained within.'''
     def __init__(self, data):
         self.original_data = data
+        if not isinstance(data, bytes):
+            data = data.encode()
         data = self.strip_magic(data)
         data, known_crc = self.split_data_crc(data)
         data = bytearray(b64decode(data))

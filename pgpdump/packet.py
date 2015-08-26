@@ -808,6 +808,7 @@ class CompressedDataPacket(Packet):
         if self.raw_compression_algo == 1:
             # ZLIB DEFLATE
             self.decompressed_data = zlib.decompress(self.data[offset:offset+self.length], -zlib.MAX_WBITS)
+        return self.length
 
     def __repr__(self):
         return "<%s: Algo %s, length %s>" % (

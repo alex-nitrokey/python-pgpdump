@@ -399,6 +399,44 @@ E/GGdt/Cn5Rr1G933H9nwxo=
         self.assertEqual(16, packet.raw_pub_algorithm)
         self.assertEqual(888716292, packet.raw_creation_time)
 
+    def test_parse_compressed_zlib(self):
+        msg = """-----BEGIN PGP MESSAGE-----
+Version: GnuPG v2
+
+owFtUm1MFEcY5lAqnqJFWhpSautCLJiL7OzOfh0FQkREEpq0igk0hO7szh4b8A5u
+Dw6KJxVo09ZrKicSCfEDpY39OisfLUHx40RA6I8SiBJBw5Wm1ZqmVtQE0dI5Yn80
+6fyZzDvP87zP884ciFoWFmnqSq0uGfAfHDGN3kFh+dOfZNdSyKHWUNZaqhQvbZpu
+t2FnuVO3uygrJSIRsRwCAmA4qCBOExTIiQJELIsEkRcVKGOJVWTKQpU4jBCDyCDZ
+wJt1B6mRQ7Gukur/4EuXLmhAA5UDKo8ZVeB5GUmMLAIWI8hptKoAXsYy0qAoIZZX
+BEaBDFQlUeGJMRmyEpKJJB2Sq1ySU0UNA5HVOCRigWWgxIsSQIQgYZljgRQCGthp
+l3djgsY12KA8FsqJqxylOJTe0G3EsEFZ36E0GWq0BgCrMowmYVrUGEmRNValaRIB
+KSwgM8Eaq/CIE1SORoBhaZ4BCGgc4ACmNaqIaJNuVbqyJP6sq013lVSi/zrZUWnP
+cstOLeTGVVMeKrkxKn5GLka6XSXvQjhV2GnoDjtlBQSpuPQQG0BIc4DnedFC4epy
+3YmL9RCCE3iRJstClZOERJJRMcnEsyrkJGkHpoGmkbliBQqiKkPA8owkYh7IZO4s
+hwHLMrKEVU5RJcjQSMIiFcpTYXcQcZ4YlW1ElIzMLrsqnZjymD8Oj18eZooMey4i
+PPS5wswrn//3x9n+Wvs0LuVE58tNvQH3QHSPmrpxT3Fc3dbmrd4X824UDqQZD2yZ
+/uZXN0UYK5CFH0WzZzz3evCDfeKjvJgLP0/J6zK+f9LWbkmKXr5YdDjq7aj1bwze
+HdGyPTFfwc9d4depF8qy/f11/fPxPza2FYy4rNsZJ13ts+3sLqxKNL6JSF7XXHra
+tOFR+5aEnC+LzJe3rCnsSh27P6tuHM2AhV/jyT2DjcOb83OCC2m5Aw87UJWBRKbf
+slpYOHJjavxsVr69bY5POnHz+M2zq7tNuV3Tvp41H8xN1KavF7tX/nSfS8w8Op7R
+EhtpvxLu+9S9atuZg7u8rRvoU+dj9z6p9Fa044TJnDv+3EbvqXs9vcHb1oHjecN1
+EzU1wYbUBcfv+eefPh57vW94U+rutILeIT144AvX+MmoCPO191v6Cs/d/kNYFWzy
+vXYp/d2p2bjrnuls3GX0ZczOBYINJ+Ojf6gv+0xKTI/wnTvUnvDRpWNN11plxuQU
+vA3s4K/bFnuZkk6rqe+XwOSQ/5Zrxu+r8L55eu8R2H+V+a7irYkCU3jcsg8TLPv3
+/xk7XpqyMzZqJjC06DF12t6Lhe6W+bWBqytcHY230i/+lpKdMhSTOGMeeSmt9e5F
+68N54XJHpuKG6VmPDx0ucfHJo/Vw7NvEC0fNenlu574rrzQl/e0pC9Tvoqe3e5PF
+fwA=
+=3Snw
+-----END PGP MESSAGE-----""".encode()
+        data = AsciiData(msg)
+        packets = list(data.packets())
+        self.assertEqual(packets[0].raw_compression_algo, 1)
+        newpackets = list(BinaryData(packets[0].decompressed_data).packets())
+        self.assertEqual(len(newpackets), 3)
+
+
+
+
 
 class EncryptedPacketsTestCase(TestCase, Helper):
     def test_parse_sessionkey_elg(self):
