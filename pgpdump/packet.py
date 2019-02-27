@@ -193,6 +193,7 @@ class SignaturePacket(Packet, AlgoLookup):
         self.key_id = None
         self.hash2 = None
         self.subpackets = []
+        self.key_flags = []
 
         self.sig_data = None
 
@@ -299,6 +300,18 @@ class SignaturePacket(Packet, AlgoLookup):
                 self.raw_expiration_time = get_int4(subpacket.data, 0)
             elif subpacket.subtype == 16:
                 self.key_id = get_key_id(subpacket.data, 0)
+            elif subpacket.subtype == 27: # See 5.2.3.21 of RFC4880
+                flags = {
+                    0x01: "C", # Certify other keys
+                    0x02: "S", # Sign data
+                    #0x04: "E", # Encrypt communications
+                    #0x08: "E", # Encrypt storage
+                    0x0c: "E", # Encrypt communications or storage
+                    0x20: "A", # Authenticate
+                }
+                for key, flag in flags.items():
+                    if subpacket.data[0] & key:
+                        self.key_flags.append(flag)
             offset += sub_len
             self.subpackets.append(subpacket)
 
