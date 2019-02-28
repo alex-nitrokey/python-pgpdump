@@ -423,13 +423,6 @@ class PublicKeyPacket(Packet, AlgoLookup):
                                        self.pubkey_version)
             self.fingerprint = md5.hexdigest().upper().encode('ascii')
         elif self.pubkey_version == 4:
-            sha1 = hashlib.sha1()
-            seed_bytes = (0x99, (self.length >> 8) & 0xff, self.length & 0xff)
-            sha1.update(pack_data(bytearray(seed_bytes)))
-            sha1.update(pack_data(self.data))
-            self.fingerprint = sha1.hexdigest().upper().encode('ascii')
-            self.key_id = self.fingerprint[24:]
-
             self.raw_creation_time = get_int4(self.data, offset)
             self.creation_time = datetime.utcfromtimestamp(
                 self.raw_creation_time)
@@ -439,6 +432,19 @@ class PublicKeyPacket(Packet, AlgoLookup):
             offset += 1
 
             offset = self.parse_key_material(offset)
+
+            # create fingerprint based on
+            # https://tools.ietf.org/html/rfc4880#section-12.2
+            # current offset is the length of the pubkey packet
+            # (returned by self.parse_key_material)
+            # self.length may be longer because of secret key material!
+            pub_packet_length = offset
+            sha1 = hashlib.sha1()
+            seed_bytes = (0x99, (pub_packet_length >> 8) & 0xff, pub_packet_length & 0xff)
+            sha1.update(pack_data(bytearray(seed_bytes)))
+            sha1.update(pack_data(self.data[:pub_packet_length]))
+            self.fingerprint = sha1.hexdigest().upper().encode('ascii')
+            self.key_id = self.fingerprint[24:]
         else:
             raise PgpdumpException("Unsupported public key packet, version %d" %
                                    self.pubkey_version)
