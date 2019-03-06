@@ -75,31 +75,31 @@ class AlgoLookup(object):
         return cls.oids.get(oid, ("Unknown", None))
 
     hash_algorithms = {
-        # (Name, digest size)
-        1: ("MD5", 128),
-        2: ("SHA1", 160),
-        3: ("RIPEMD160", 160),
-        8: ("SHA256", 256),
-        9: ("SHA384", 384),
-        10: ("SHA512", 512),
-        11: ("SHA224", 224),
+        # (Name, hashlib function)
+        1: ("MD5", hashlib.md5()),
+        2: ("SHA1", hashlib.sha1()),
+        3: ("RIPEMD160", None),
+        8: ("SHA256", hashlib.sha256()),
+        9: ("SHA384", hashlib.sha384()),
+        10: ("SHA512", hashlib.sha512()),
+        11: ("SHA224", hashlib.sha224()),
     }
 
     @classmethod
     def _lookup_hash_algorithm(cls, alg):
         # reserved values check
         if alg in (4, 5, 6, 7):
-            return ("Reserved", 0)
+            return ("Reserved", None)
         if 100 <= alg <= 110:
-            return ("Private/Experimental algorithm", 0)
-        return cls.hash_algorithms.get(alg, ("Unknown", 0))
+            return ("Private/Experimental algorithm", None)
+        return cls.hash_algorithms.get(alg, ("Unknown", None))
 
     @classmethod
     def lookup_hash_algorithm(cls, alg):
         return cls._lookup_hash_algorithm(alg)[0]
 
     @classmethod
-    def lookup_hash_algorithm_size(cls, alg):
+    def lookup_hash_algorithm_func(cls, alg):
         return cls._lookup_hash_algorithm(alg)[1]
 
 
@@ -555,7 +555,7 @@ class SecretKeyPacket(PublicKeyPacket):
         self.s2k_cipher = None
         self.s2k_cipher_size = None
         self.s2k_hash = None
-        self.s2k_hash_size = None
+        self.s2k_hash_func = None
         self.s2k_iv = None
         self.checksum = None
         self.serial_number = None
@@ -611,7 +611,7 @@ class SecretKeyPacket(PublicKeyPacket):
             hash_id = self.data[offset]
             offset += 1
             self.s2k_hash = self.lookup_hash_algorithm(hash_id)
-            self.s2k_hash_size = self.lookup_hash_algorithm_size(hash_id)
+            self.s2k_hash_func = self.lookup_hash_algorithm_func(hash_id)
 
             has_iv = True
 
@@ -629,9 +629,9 @@ class SecretKeyPacket(PublicKeyPacket):
                 offset += 8
                 # TODO think of a better way to get passphrase
                 passphrase = getpass.getpass("Please provide passphrase: ")
-                hashdata = salt + passphrase
+                hashinput = salt + passphrase
 
-                key = self.calculate_session_key(hashdata)
+                key = self.calculate_session_key(hashinput)
 
             # reserved
             elif s2k_type_id == 2:
@@ -651,15 +651,15 @@ class SecretKeyPacket(PublicKeyPacket):
                 passphrase = passphrase.encode('utf-8')
 
                 # again, see https://tools.ietf.org/html/rfc4880#section-3.7.1.3
-                hashdata = salt + passphrase
+                hashinput = salt + passphrase
                 # if count is less than the size of salt + passphrase we take
-                # both as hashdata (without cutting)
+                # both as hashinput (without cutting)
                 if not count < len(salt + passphrase):
-                    while(len(hashdata) <= count):
-                        hashdata += salt + passphrase
-                    hashdata = hashdata[:count]
+                    while(len(hashinput) <= count):
+                        hashinput += salt + passphrase
+                    hashinput = hashinput[:count]
 
-                key = self.calculate_session_key(hashdata)
+                key = self.calculate_session_key(hashinput)
 
             # GnuPG string-to-key
             elif 100 <= s2k_type_id <= 110:
@@ -722,8 +722,27 @@ class SecretKeyPacket(PublicKeyPacket):
             raise PgpdumpException(
                 "Unsupported s2k_id %d" % self.s2k_id)
 
-    def calculate_session_key(self, hashdata):
-        sessionkey = None
+    def calculate_session_key(self, hashinput):
+        '''calculate session key as described in
+        https://tools.ietf.org/html/rfc4880#section-3.7.1.1 '''
+
+        hashed = self.s2k_hash_func
+        hashed.update(hashinput)
+        hashed = hashed.digest()
+        counter = 1 # instances already hashed
+
+        while(len(hashed) < self.s2k_cipher_size):
+            # hash again but with preloaded zero bytes
+            newhashed = self.s2k_hash_func
+            newhashed.update(bytes(counter))
+            newhashed.update(hashinput)
+
+            # add to previous hash(es)
+            hashed += newhashed.digest()
+            counter += 1
+
+        # truncate to session key size
+        sessionkey = hashed[:self.s2k_cipher_size]
         return sessionkey
 
     def parse_private_key_material(self, offset, sessionkey=None):
