@@ -568,6 +568,7 @@ class SecretKeyPacket(PublicKeyPacket):
             offset = self.parse_private_key_material(offset)
             self.checksum = get_int2(self.data, offset)
             offset += 2
+            return offset
         elif self.s2k_id in (254, 255):
             # encrypted key data
             cipher_id = self.data[offset]
@@ -584,39 +585,49 @@ class SecretKeyPacket(PublicKeyPacket):
             offset += 1
             name, s2k_length = self.lookup_s2k(s2k_type_id)
             self.s2k_type = name
-
             has_iv = True
+
+            # simple string-to-key
             if s2k_type_id == 0:
-                # simple string-to-key
+                # hash
                 hash_id = self.data[offset]
                 offset += 1
                 self.s2k_hash = self.lookup_hash_algorithm(hash_id)
+                # TODO calculate session key and parse key paterial
 
+            # salted string-to-key
             elif s2k_type_id == 1:
-                # salted string-to-key
+                # hash
                 hash_id = self.data[offset]
                 offset += 1
                 self.s2k_hash = self.lookup_hash_algorithm(hash_id)
-                # ignore 8 bytes
+                # salt
+                salt = self.data[offset:offset+8]
                 offset += 8
+                # TODO calculate session key and parse key paterial
 
+            # reserved
             elif s2k_type_id == 2:
-                # reserved
                 pass
 
+            # iterated and salted
             elif s2k_type_id == 3:
-                # iterated and salted
+                # hash
                 hash_id = self.data[offset]
-                offset += 1
                 self.s2k_hash = self.lookup_hash_algorithm(hash_id)
-                # ignore 8 bytes
-                offset += 8
-                # ignore count
                 offset += 1
-                # TODO: parse and store count ?
+                # salt
+                salt = self.data[offset:offset+8]
+                offset += 8
+                # count, see https://tools.ietf.org/html/rfc4880#section-3.7.1.3
+                c = self.data[offset]
+                count = (16 + (c & 15)) << ((c >> 4) + 6)
+                offset += 1
+                # TODO calculate session key and parse key paterial
+                print("Hey")
 
+            # GnuPG string-to-key
             elif 100 <= s2k_type_id <= 110:
-                # GnuPG string-to-key
                 # According to g10/parse-packet.c near line 1832, the 101 packet
                 # type is a special GnuPG extension.  This S2K extension is
                 # 6 bytes in total:
@@ -671,6 +682,11 @@ class SecretKeyPacket(PublicKeyPacket):
             # TODO decrypt key data
             # TODO parse checksum
             return offset
+
+        # symmetric-key encryption algorithm identifier
+        else:
+            raise PgpdumpException(
+                "Unsupported s2k_id %d" % self.s2k_id)
 
     def parse_private_key_material(self, offset):
         if self.raw_pub_algorithm in (1, 2, 3):
