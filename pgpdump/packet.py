@@ -75,45 +75,55 @@ class AlgoLookup(object):
         return cls.oids.get(oid, ("Unknown", None))
 
     hash_algorithms = {
-        1: "MD5",
-        2: "SHA1",
-        3: "RIPEMD160",
-        8: "SHA256",
-        9: "SHA384",
-        10: "SHA512",
-        11: "SHA224",
+        # (Name, digest size)
+        1: ("MD5", 128),
+        2: ("SHA1", 160),
+        3: ("RIPEMD160", 160),
+        8: ("SHA256", 256),
+        9: ("SHA384", 384),
+        10: ("SHA512", 512),
+        11: ("SHA224", 224),
     }
 
     @classmethod
-    def lookup_hash_algorithm(cls, alg):
+    def _lookup_hash_algorithm(cls, alg):
         # reserved values check
         if alg in (4, 5, 6, 7):
-            return "Reserved"
+            return ("Reserved", 0)
         if 100 <= alg <= 110:
-            return "Private/Experimental algorithm"
-        return cls.hash_algorithms.get(alg, "Unknown")
+            return ("Private/Experimental algorithm", 0)
+        return cls.hash_algorithms.get(alg, ("Unknown", 0))
+
+    @classmethod
+    def lookup_hash_algorithm(cls, alg):
+        return cls._lookup_hash_algorithm(alg)[0]
+
+    @classmethod
+    def lookup_hash_algorithm_size(cls, alg):
+        return cls._lookup_hash_algorithm(alg)[1]
+
 
     sym_algorithms = {
-        # (Name, IV length)
-        0: ("Plaintext or unencrypted", 0),
-        1: ("IDEA", 8),
-        2: ("Triple-DES", 8),
-        3: ("CAST5", 8),
-        4: ("Blowfish", 8),
-        5: ("Reserved", 8),
-        6: ("Reserved", 8),
-        7: ("AES with 128-bit key", 16),
-        8: ("AES with 192-bit key", 16),
-        9: ("AES with 256-bit key", 16),
-        10: ("Twofish with 256-bit key", 16),
-        11: ("Camellia with 128-bit key", 16),
-        12: ("Camellia with 192-bit key", 16),
-        13: ("Camellia with 256-bit key", 16),
+        # (Name, IV length, key size)
+        0: ("Plaintext or unencrypted", 0, 0),
+        1: ("IDEA", 8, 128),
+        2: ("Triple-DES", 8, 168),
+        3: ("CAST5", 8, 128),
+        4: ("Blowfish", 8, 128),
+        5: ("Reserved", 8, 0),
+        6: ("Reserved", 8, 0),
+        7: ("AES with 128-bit key", 16, 128),
+        8: ("AES with 192-bit key", 16, 192),
+        9: ("AES with 256-bit key", 16, 256),
+        10: ("Twofish with 256-bit key", 16, 256),
+        11: ("Camellia with 128-bit key", 16, 128),
+        12: ("Camellia with 192-bit key", 16, 192),
+        13: ("Camellia with 256-bit key", 16, 256),
     }
 
     @classmethod
     def _lookup_sym_algorithm(cls, alg):
-        return cls.sym_algorithms.get(alg, ("Unknown", 0))
+        return cls.sym_algorithms.get(alg, ("Unknown", 0, 0))
 
     @classmethod
     def lookup_sym_algorithm(cls, alg):
@@ -122,6 +132,10 @@ class AlgoLookup(object):
     @classmethod
     def lookup_sym_algorithm_iv(cls, alg):
         return cls._lookup_sym_algorithm(alg)[1]
+
+    @classmethod
+    def lookup_sym_algorithm_size(cls, alg):
+        return cls._lookup_sym_algorithm(alg)[2]
 
 
 class SignatureSubpacket(object):
