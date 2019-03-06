@@ -553,7 +553,9 @@ class SecretKeyPacket(PublicKeyPacket):
         self.s2k_id = None
         self.s2k_type = None
         self.s2k_cipher = None
+        self.s2k_cipher_size = None
         self.s2k_hash = None
+        self.s2k_hash_size = None
         self.s2k_iv = None
         self.checksum = None
         self.serial_number = None
@@ -580,16 +582,18 @@ class SecretKeyPacket(PublicKeyPacket):
 
         if self.s2k_id == 0:
             # plaintext key data
+            # TODO should be removed as soon this can be done for all
             offset = self.parse_private_key_material(offset)
+            # TODO should be removed as soon this can be done for all
             self.checksum = get_int2(self.data, offset)
-            # TODO checksum check for all at the end
             offset += 2
-            return offset
+
         elif self.s2k_id in (254, 255):
             # encrypted key data
             cipher_id = self.data[offset]
             offset += 1
             self.s2k_cipher = self.lookup_sym_algorithm(cipher_id)
+            self.s2k_cipher_size = self.lookup_sym_algorithm_size(cipher_id)
 
             # s2k_length is the len of the entire S2K specifier, as per
             # section 3.7.1 in RFC 4880
@@ -597,30 +601,29 @@ class SecretKeyPacket(PublicKeyPacket):
             # octects we've parsed matches the expected length of the s2k
             offset_before_s2k = offset
 
+            # type id
             s2k_type_id = self.data[offset]
             offset += 1
             name, s2k_length = self.lookup_s2k(s2k_type_id)
             self.s2k_type = name
+
+            # hash algorithm
+            hash_id = self.data[offset]
+            offset += 1
+            self.s2k_hash = self.lookup_hash_algorithm(hash_id)
+            self.s2k_hash_size = self.lookup_hash_algorithm_size(hash_id)
+
             has_iv = True
 
             # simple string-to-key
             if s2k_type_id == 0:
-                # hash
-                hash_id = self.data[offset]
-                offset += 1
-                self.s2k_hash = self.lookup_hash_algorithm(hash_id)
                 # TODO think of a better way to get passphrase
                 passphrase = getpass.getpass("Please provide passphrase: ")
 
                 key = self.calculate_session_key(passphrase)
-                #offset = self.parse_private_key_material(offset, key)
 
             # salted string-to-key
             elif s2k_type_id == 1:
-                # hash
-                hash_id = self.data[offset]
-                offset += 1
-                self.s2k_hash = self.lookup_hash_algorithm(hash_id)
                 # salt
                 salt = self.data[offset:offset+8]
                 offset += 8
@@ -629,7 +632,6 @@ class SecretKeyPacket(PublicKeyPacket):
                 hashdata = salt + passphrase
 
                 key = self.calculate_session_key(hashdata)
-                #offset = self.parse_private_key_material(offset, key)
 
             # reserved
             elif s2k_type_id == 2:
@@ -637,10 +639,6 @@ class SecretKeyPacket(PublicKeyPacket):
 
             # iterated and salted
             elif s2k_type_id == 3:
-                # hash
-                hash_id = self.data[offset]
-                self.s2k_hash = self.lookup_hash_algorithm(hash_id)
-                offset += 1
                 # salt
                 salt = self.data[offset:offset+8]
                 offset += 8
@@ -662,7 +660,6 @@ class SecretKeyPacket(PublicKeyPacket):
                     hashdata = hashdata[:count]
 
                 key = self.calculate_session_key(hashdata)
-                #offset = self.parse_private_key_material(offset, key)
 
             # GnuPG string-to-key
             elif 100 <= s2k_type_id <= 110:
@@ -674,9 +671,6 @@ class SecretKeyPacket(PublicKeyPacket):
                 #   Octet 1:   hash algorithm
                 #   Octet 2-4: "GNU"
                 #   Octet 5:   mode integer
-                hash_id = self.data[offset]
-                offset += 1
-                self.s2k_hash = self.lookup_hash_algorithm(hash_id)
 
                 gnu = self.data[offset:offset + 3]
                 offset += 3
@@ -718,6 +712,8 @@ class SecretKeyPacket(PublicKeyPacket):
                 offset += s2k_iv_len
 
             # TODO decrypt key data
+            #offset = self.parse_private_key_material(offset, key)
+
             # TODO parse checksum
             return offset
 
