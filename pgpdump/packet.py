@@ -1,4 +1,5 @@
 from datetime import datetime, timedelta
+import getpass
 import hashlib
 from math import ceil, log
 import re
@@ -567,6 +568,7 @@ class SecretKeyPacket(PublicKeyPacket):
             # plaintext key data
             offset = self.parse_private_key_material(offset)
             self.checksum = get_int2(self.data, offset)
+            # TODO checksum check for all at the end
             offset += 2
             return offset
         elif self.s2k_id in (254, 255):
@@ -593,7 +595,11 @@ class SecretKeyPacket(PublicKeyPacket):
                 hash_id = self.data[offset]
                 offset += 1
                 self.s2k_hash = self.lookup_hash_algorithm(hash_id)
-                # TODO calculate session key and parse key paterial
+                # TODO think of a better way to get passphrase
+                passphrase = getpass.getpass("Please provide passphrase: ")
+
+                key = self.calculate_session_key(passphrase)
+                #offset = self.parse_private_key_material(offset, key)
 
             # salted string-to-key
             elif s2k_type_id == 1:
@@ -604,7 +610,12 @@ class SecretKeyPacket(PublicKeyPacket):
                 # salt
                 salt = self.data[offset:offset+8]
                 offset += 8
-                # TODO calculate session key and parse key paterial
+                # TODO think of a better way to get passphrase
+                passphrase = getpass.getpass("Please provide passphrase: ")
+                hashdata = salt + passphrase
+
+                key = self.calculate_session_key(hashdata)
+                #offset = self.parse_private_key_material(offset, key)
 
             # reserved
             elif s2k_type_id == 2:
@@ -623,8 +634,21 @@ class SecretKeyPacket(PublicKeyPacket):
                 c = self.data[offset]
                 count = (16 + (c & 15)) << ((c >> 4) + 6)
                 offset += 1
-                # TODO calculate session key and parse key paterial
-                print("Hey")
+                # TODO think of a better way to get passphrase
+                passphrase = getpass.getpass("Please provide passphrase: ")
+                passphrase = passphrase.encode('utf-8')
+
+                # again, see https://tools.ietf.org/html/rfc4880#section-3.7.1.3
+                hashdata = salt + passphrase
+                # if count is less than the size of salt + passphrase we take
+                # both as hashdata (without cutting)
+                if not count < len(salt + passphrase):
+                    while(len(hashdata) <= count):
+                        hashdata += salt + passphrase
+                    hashdata = hashdata[:count]
+
+                key = self.calculate_session_key(hashdata)
+                #offset = self.parse_private_key_material(offset, key)
 
             # GnuPG string-to-key
             elif 100 <= s2k_type_id <= 110:
@@ -688,7 +712,11 @@ class SecretKeyPacket(PublicKeyPacket):
             raise PgpdumpException(
                 "Unsupported s2k_id %d" % self.s2k_id)
 
-    def parse_private_key_material(self, offset):
+    def calculate_session_key(self, hashdata):
+        sessionkey = None
+        return sessionkey
+
+    def parse_private_key_material(self, offset, sessionkey=None):
         if self.raw_pub_algorithm in (1, 2, 3):
             self.pub_algorithm_type = "rsa"
             # d, p, q, u
