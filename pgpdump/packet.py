@@ -556,7 +556,10 @@ class SecretKeyPacket(PublicKeyPacket):
         self.s2k_cipher_size = None
         self.s2k_hash = None
         self.s2k_hash_func = None
+        self.s2k_count = None
+        self.s2k_salt = None
         self.s2k_iv = None
+        self.s2k_key = None
         self.checksum = None
         self.serial_number = None
         # RSA fields
@@ -582,11 +585,9 @@ class SecretKeyPacket(PublicKeyPacket):
 
         if self.s2k_id == 0:
             # plaintext key data
-            # TODO should be removed as soon this can be done for all
-            offset = self.parse_private_key_material(offset)
-            # TODO should be removed as soon this can be done for all
+            offset += self.parse_private_key_material(self.data[offset:])
             self.checksum = get_int2(self.data, offset)
-            offset += 2
+            offset +=2
 
         elif self.s2k_id in (254, 255):
             # encrypted key data
@@ -617,21 +618,21 @@ class SecretKeyPacket(PublicKeyPacket):
 
             # simple string-to-key
             if s2k_type_id == 0:
-                # TODO think of a better way to get passphrase
+                # TODO look if there is a better way to get passphrase
                 passphrase = getpass.getpass("Please provide passphrase: ")
 
-                key = self.calculate_session_key(passphrase)
+                self.s2k_key = self.calculate_session_key(passphrase)
 
             # salted string-to-key
             elif s2k_type_id == 1:
                 # salt
-                salt = self.data[offset:offset+8]
+                self.s2k_salt = self.data[offset:offset+8]
                 offset += 8
-                # TODO think of a better way to get passphrase
+                # TODO look if there is a better way to get passphrase
                 passphrase = getpass.getpass("Please provide passphrase: ")
-                hashinput = salt + passphrase
+                hashinput = self.s2k_salt + passphrase
 
-                key = self.calculate_session_key(hashinput)
+                self.s2k_key = self.calculate_session_key(hashinput)
 
             # reserved
             elif s2k_type_id == 2:
@@ -640,26 +641,26 @@ class SecretKeyPacket(PublicKeyPacket):
             # iterated and salted
             elif s2k_type_id == 3:
                 # salt
-                salt = self.data[offset:offset+8]
+                self.s2k_salt = self.data[offset:offset+8]
                 offset += 8
                 # count, see https://tools.ietf.org/html/rfc4880#section-3.7.1.3
                 c = self.data[offset]
-                count = (16 + (c & 15)) << ((c >> 4) + 6)
+                self.s2k_count = (16 + (c & 15)) << ((c >> 4) + 6)
                 offset += 1
-                # TODO think of a better way to get passphrase
+                # TODO look if there is a better way to get passphrase
                 passphrase = getpass.getpass("Please provide passphrase: ")
                 passphrase = passphrase.encode('utf-8')
 
                 # again, see https://tools.ietf.org/html/rfc4880#section-3.7.1.3
-                hashinput = salt + passphrase
+                hashinput = self.s2k_salt + passphrase
                 # if count is less than the size of salt + passphrase we take
                 # both as hashinput (without cutting)
-                if not count < len(salt + passphrase):
-                    while(len(hashinput) <= count):
-                        hashinput += salt + passphrase
-                    hashinput = hashinput[:count]
+                if not self.s2k_count < len(self.s2k_salt + passphrase):
+                    while(len(hashinput) <= self.s2k_count):
+                        hashinput += self.s2k_salt + passphrase
+                    hashinput = hashinput[:self.s2k_count]
 
-                key = self.calculate_session_key(hashinput)
+                self.s2k_key = self.calculate_session_key(hashinput)
 
             # GnuPG string-to-key
             elif 100 <= s2k_type_id <= 110:
@@ -683,6 +684,7 @@ class SecretKeyPacket(PublicKeyPacket):
                 offset += 1
                 if mode == 1001:
                     has_iv = False
+                    return offset
                 elif mode == 1002:
                     has_iv = False
 
@@ -694,6 +696,7 @@ class SecretKeyPacket(PublicKeyPacket):
 
                     self.serial_number = get_hex_data(self.data, offset + 1,
                                                       serial_len)
+                    return offset
                 else:
                     # TODO implement other modes?
                     raise PgpdumpException(
@@ -711,16 +714,18 @@ class SecretKeyPacket(PublicKeyPacket):
                 self.s2k_iv = self.data[offset:offset + s2k_iv_len]
                 offset += s2k_iv_len
 
-            # TODO decrypt key data
-            #offset = self.parse_private_key_material(offset, key)
+            # parse key data
+            offset += self.parse_private_key_material(self.data[offset:], self.s2k_key)
 
             # TODO parse checksum
-            return offset
 
-        # symmetric-key encryption algorithm identifier
+        # Simple S2K algorithm using MD5 hash, skipping
+        # See https://tools.ietf.org/html/rfc4880#section-3.7.2.1
         else:
             raise PgpdumpException(
-                "Unsupported s2k_id %d" % self.s2k_id)
+                "Unsupported key encryption %d" % self.s2k_id)
+
+        return offset
 
     def calculate_session_key(self, hashinput):
         '''calculate session key as described in
@@ -745,22 +750,35 @@ class SecretKeyPacket(PublicKeyPacket):
         sessionkey = hashed[:self.s2k_cipher_size]
         return sessionkey
 
-    def parse_private_key_material(self, offset, sessionkey=None):
+    def decrypt_key_material(data, iv, key):
+        # TODO
+        return
+
+    def parse_private_key_material(self, data, sessionkey=None):
+        offset = 0 # parse mpi data and remember length of all key material
+
+        # if a key is present, try to decrypt key material and proceed parsing
+        if self.s2k_key:
+            # TODO how long is the key material data?
+            #encrypted_data = data[offset:keydata_len]
+            #data = self.decrypt_key_material(encrypted_data, self.s2k_iv, self.s2k_key)
+            return offset
+
         if self.raw_pub_algorithm in (1, 2, 3):
             self.pub_algorithm_type = "rsa"
             # d, p, q, u
-            self.exponent_d, offset = get_mpi(self.data, offset)
-            self.prime_p, offset = get_mpi(self.data, offset)
-            self.prime_q, offset = get_mpi(self.data, offset)
-            self.multiplicative_inverse, offset = get_mpi(self.data, offset)
+            self.exponent_d, offset = get_mpi(data, offset)
+            self.prime_p, offset = get_mpi(data, offset)
+            self.prime_q, offset = get_mpi(data, offset)
+            self.multiplicative_inverse, offset = get_mpi(data, offset)
         elif self.raw_pub_algorithm == 17:
             self.pub_algorithm_type = "dsa"
             # x
-            self.exponent_x, offset = get_mpi(self.data, offset)
+            self.exponent_x, offset = get_mpi(data, offset)
         elif self.raw_pub_algorithm in (16, 20):
             self.pub_algorithm_type = "elg"
             # x
-            self.exponent_x, offset = get_mpi(self.data, offset)
+            self.exponent_x, offset = get_mpi(data, offset)
         elif 100 <= self.raw_pub_algorithm <= 110:
             # Private/Experimental algorithms, just move on
             pass
