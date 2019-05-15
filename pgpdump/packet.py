@@ -1,3 +1,5 @@
+from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+from cryptography.hazmat.backends import default_backend
 from datetime import datetime, timedelta
 import getpass
 import hashlib
@@ -104,38 +106,42 @@ class AlgoLookup(object):
 
 
     sym_algorithms = {
-        # (Name, IV length, key size)
-        0: ("Plaintext or unencrypted", 0, 0),
-        1: ("IDEA", 8, 128),
-        2: ("Triple-DES", 8, 168),
-        3: ("CAST5", 8, 128),
-        4: ("Blowfish", 8, 128),
-        5: ("Reserved", 8, 0),
-        6: ("Reserved", 8, 0),
-        7: ("AES with 128-bit key", 16, 128),
-        8: ("AES with 192-bit key", 16, 192),
-        9: ("AES with 256-bit key", 16, 256),
-        10: ("Twofish with 256-bit key", 16, 256),
-        11: ("Camellia with 128-bit key", 16, 128),
-        12: ("Camellia with 192-bit key", 16, 192),
-        13: ("Camellia with 256-bit key", 16, 256),
+        # (Name, class of cryptography lib, IV length, key size)
+        0: ("Plaintext or unencrypted", None, 0, 0),
+        1: ("IDEA", algorithms.IDEA, 8, 128),
+        2: ("Triple-DES", algorithms.TripleDES, 8, 168),
+        3: ("CAST5", algorithms.CAST5, 8, 128),
+        4: ("Blowfish", algorithms.Blowfish, 8, 128),
+        5: ("Reserved", None, 0, 0),
+        6: ("Reserved", None, 0, 0),
+        7: ("AES with 128-bit key", algorithms.AES, 16, 128),
+        8: ("AES with 192-bit key", algorithms.AES, 16, 192),
+        9: ("AES with 256-bit key", algorithms.AES, 16, 256),
+        10: ("Twofish with 256-bit key", None, 16, 256), # not supported by cryptography
+        11: ("Camellia with 128-bit key", algorithms.Camellia, 16, 128),
+        12: ("Camellia with 192-bit key", algorithms.Camellia, 16, 192),
+        13: ("Camellia with 256-bit key", algorithms.Camellia, 16, 256),
     }
 
     @classmethod
     def _lookup_sym_algorithm(cls, alg):
-        return cls.sym_algorithms.get(alg, ("Unknown", 0, 0))
+        return cls.sym_algorithms.get(alg, ("Unknown", None, 0, 0))
 
     @classmethod
     def lookup_sym_algorithm(cls, alg):
         return cls._lookup_sym_algorithm(alg)[0]
 
     @classmethod
-    def lookup_sym_algorithm_iv(cls, alg):
+    def lookup_sym_algorithm_type(cls, alg):
         return cls._lookup_sym_algorithm(alg)[1]
 
     @classmethod
-    def lookup_sym_algorithm_size(cls, alg):
+    def lookup_sym_algorithm_iv(cls, alg):
         return cls._lookup_sym_algorithm(alg)[2]
+
+    @classmethod
+    def lookup_sym_algorithm_size(cls, alg):
+        return cls._lookup_sym_algorithm(alg)[3]
 
 
 class SignatureSubpacket(object):
@@ -394,7 +400,6 @@ class PublicKeyPacket(Packet, AlgoLookup):
         # ECC information
         self.raw_oid = None
         self.raw_oid_length = None
-
         self.oid = None
 
         super(PublicKeyPacket, self).__init__(*args, **kwargs)
@@ -553,6 +558,7 @@ class SecretKeyPacket(PublicKeyPacket):
         self.s2k_id = None
         self.s2k_type = None
         self.s2k_cipher = None
+        self.s2k_cipher_obj = None
         self.s2k_cipher_size = None
         self.s2k_hash = None
         self.s2k_hash_func = None
@@ -594,6 +600,7 @@ class SecretKeyPacket(PublicKeyPacket):
             cipher_id = self.data[offset]
             offset += 1
             self.s2k_cipher = self.lookup_sym_algorithm(cipher_id)
+            self.s2k_cipher_obj = self.lookup_sym_algorithm_type(cipher_id)
             self.s2k_cipher_size = self.lookup_sym_algorithm_size(cipher_id)
 
             # s2k_length is the len of the entire S2K specifier, as per
@@ -715,9 +722,7 @@ class SecretKeyPacket(PublicKeyPacket):
                 offset += s2k_iv_len
 
             # parse key data
-            offset += self.parse_private_key_material(self.data[offset:], self.s2k_key)
-
-            # TODO parse checksum
+            offset += self.parse_private_key_material(self.data[offset:])
 
         # Simple S2K algorithm using MD5 hash, skipping
         # See https://tools.ietf.org/html/rfc4880#section-3.7.2.1
@@ -730,13 +735,15 @@ class SecretKeyPacket(PublicKeyPacket):
     def calculate_session_key(self, hashinput):
         '''calculate session key as described in
         https://tools.ietf.org/html/rfc4880#section-3.7.1.1 '''
-
         hashed = self.s2k_hash_func
         hashed.update(hashinput)
         hashed = hashed.digest()
         counter = 1 # instances already hashed
 
-        while(len(hashed) < self.s2k_cipher_size):
+        # as we use bytearrays, we need byte length instead of bit size
+        key_byte_length = (self.s2k_cipher_size + 7) // 8
+
+        while(len(hashed) < key_byte_length):
             # hash again but with preloaded zero bytes
             newhashed = self.s2k_hash_func
             newhashed.update(bytes(counter))
@@ -747,23 +754,54 @@ class SecretKeyPacket(PublicKeyPacket):
             counter += 1
 
         # truncate to session key size
-        sessionkey = hashed[:self.s2k_cipher_size]
+        sessionkey = hashed[:key_byte_length]
         return sessionkey
 
-    def decrypt_key_material(data, iv, key):
-        # TODO
-        return
+    def decrypt_key_material(self, data):
+        if (self.pubkey_version == 4):
+            # decrypt key material using CFB mode
+            # see https://tools.ietf.org/html/rfc4880#section-13.9
+            algorithm = self.s2k_cipher_obj(self.s2k_key)
+            mode = modes.CFB(self.s2k_iv)
+            backend = default_backend()
+            cipher = Cipher(algorithm, mode, backend)
+            decryptor = cipher.decryptor()
+            plaintext = decryptor.update(data) + decryptor.finalize()
 
-    def parse_private_key_material(self, data, sessionkey=None):
+            # verify successful decryption based on checksum
+            # see https://tools.ietf.org/html/rfc4880#section-5.5.3
+            if self.s2k_id == 255:
+                self.checksum = get_int2(plaintext, len(plaintext)-2)
+                checksum = len(plaintext)-2 % 65536
+            elif self.s2k_id == 254:
+                self.checksum = plaintext[(len(plaintext)-20):]
+                checksum = hashlib.sha1()
+                checksum.update(pack_data(plaintext[:(len(plaintext)-20)]))
+            if self.checksum == checksum.digest():
+                return plaintext
+            # plaintext could not be verified
+            else:
+                print("Could not decrypt key material! Procced without parsing.")
+                return None
+        else:
+            # TODO
+            # "With V3 keys, the MPI bit count prefix (i.e., the first two octets) 
+            # is not encrypted.  Only the MPI non-prefix data is encrypted."
+            # See https://tools.ietf.org/html/rfc4880#section-5.5.3 '''
+
+            print("Can not decrypt key material: Currently only possible for v4 keys.")
+            return None
+
+    def parse_private_key_material(self, data):
         offset = 0 # parse mpi data and remember length of all key material
 
         # if a key is present, try to decrypt key material and proceed parsing
         if self.s2k_key:
-            # TODO how long is the key material data?
-            #encrypted_data = data[offset:keydata_len]
-            #data = self.decrypt_key_material(encrypted_data, self.s2k_iv, self.s2k_key)
-            return offset
+            data = self.decrypt_key_material(data)
+            if data is None: # key material could not be decrypted, stop parsing
+                return 0
 
+        # parse data
         if self.raw_pub_algorithm in (1, 2, 3):
             self.pub_algorithm_type = "rsa"
             # d, p, q, u
