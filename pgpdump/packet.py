@@ -660,14 +660,17 @@ class SecretKeyPacket(PublicKeyPacket):
                 # TODO look if there is a better way to get passphrase
                 passphrase = pass_getpass("Please provide passphrase: ")
                 passphrase = passphrase.encode('utf-8')
+                assert len(passphrase) > 0
 
                 # again, see https://tools.ietf.org/html/rfc4880#section-3.7.1.3
                 hashinput = self.s2k_salt + passphrase
                 # if count is less than the size of salt + passphrase we take
                 # both as hashinput (without cutting)
                 if not self.s2k_count < len(self.s2k_salt + passphrase):
+                    print(len(hashinput) <= self.s2k_count, len(hashinput) , self.s2k_count)
                     while(len(hashinput) <= self.s2k_count):
                         hashinput += self.s2k_salt + passphrase # FIXME forever loop?
+                        print(len(hashinput) <= self.s2k_count, len(hashinput) , self.s2k_count)
                     hashinput = hashinput[:self.s2k_count]
 
                 self.s2k_key = self.calculate_session_key(hashinput)
