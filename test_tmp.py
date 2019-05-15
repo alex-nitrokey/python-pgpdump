@@ -567,7 +567,7 @@ class SecretKeyPacketTestCase(TestCase, Helper):
                 self.assertEqual("Iterated and Salted S2K", packet.s2k_type)
                 self.assertEqual("AES with 128-bit key", packet.s2k_cipher)
                 self.assertEqual("SHA1", packet.s2k_hash)
-                self.assertEqual(bytearray(b"\x25\x31\x2c\x15\x0d\x1a\xa4\x32"), packet.s2k_salt)
+                self.assertEqual(b"\x25\x31\x2c\x15\x0d\x1a\xa4\x32", packet.s2k_salt)
                 self.assertEqual(28311552, packet.s2k_count)
                 self.assertEqual(
                     bytearray(b"\xdb\xfb\xca\x71\x59\x5a\x59\xf4\xa4\xc8\x34\x4c\x70\xc7\x6e\xf8"),
@@ -578,10 +578,10 @@ class SecretKeyPacketTestCase(TestCase, Helper):
                 self.assertEqual("Iterated and Salted S2K", packet.s2k_type)
                 self.assertEqual("AES with 128-bit key", packet.s2k_cipher)
                 self.assertEqual("SHA1", packet.s2k_hash)
-                self.assertEqual(bytearray(b"\x7a\xd8\x0d\x35\xa4\x44\x4a\x4b"), packet.s2k_salt)
+                self.assertEqual(b"\x7a\xd8\x0d\x35\xa4\x44\x4a\x4b", packet.s2k_salt)
                 self.assertEqual(28311552, packet.s2k_count)
                 self.assertEqual(
-                    bytearray(b"\xc0\x01\x34\xdb\xd7\xda\xbe\x15\xaf\xae\x33\x5c\x86\x42\x56\x40"),
+                    b"\xc0\x01\x34\xdb\xd7\xda\xbe\x15\xaf\xae\x33\x5c\x86\x42\x56\x40",
                     packet.s2k_iv)
                 # TODO add values of key material like in plain below 
 

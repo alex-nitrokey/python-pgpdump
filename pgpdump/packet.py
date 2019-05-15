@@ -667,7 +667,7 @@ class SecretKeyPacket(PublicKeyPacket):
                 # both as hashinput (without cutting)
                 if not self.s2k_count < len(self.s2k_salt + passphrase):
                     while(len(hashinput) <= self.s2k_count):
-                        hashinput += self.s2k_salt + passphrase
+                        hashinput += self.s2k_salt + passphrase # FIXME forever loop?
                     hashinput = hashinput[:self.s2k_count]
 
                 self.s2k_key = self.calculate_session_key(hashinput)
@@ -1105,5 +1105,7 @@ def construct_packet(data, header_start):
             header_start = next_header_start
         else:
             break
+    packet_data = bytes(packet_data)
+    original_data = bytes(original_data)
     packet = PacketType(tag, name, new, packet_data, original_data)
     return consumed, packet
