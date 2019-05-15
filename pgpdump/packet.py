@@ -775,7 +775,8 @@ class SecretKeyPacket(PublicKeyPacket):
             backend = default_backend()
             cipher = Cipher(algorithm, mode, backend)
             decryptor = cipher.decryptor()
-            plaintext = decryptor.update(data) + decryptor.finalize()
+            plaintext = data
+            # plaintext = decryptor.update(data) + decryptor.finalize()
 
             # verify successful decryption based on checksum
             # see https://tools.ietf.org/html/rfc4880#section-5.5.3
@@ -791,6 +792,7 @@ class SecretKeyPacket(PublicKeyPacket):
             # plaintext could not be verified
             else:
                 print("Could not decrypt key material! Procced without parsing.")
+                assert False
                 return None
         else:
             # TODO
