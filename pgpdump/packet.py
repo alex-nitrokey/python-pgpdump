@@ -10,9 +10,6 @@ import zlib
 from .utils import (PgpdumpException, get_int2, get_int4, get_mpi,
                     get_key_id, get_hex_data, get_int_bytes, pack_data)
 
-# pass_getpass = getpass.getpass
-pass_getpass = lambda x: 'password'
-
 
 class Packet(object):
     '''The base packet object containing various fields pulled from the packet
@@ -81,13 +78,13 @@ class AlgoLookup(object):
 
     hash_algorithms = {
         # (Name, hashlib function)
-        1: ("MD5", hashlib.md5()),
-        2: ("SHA1", hashlib.sha1()),
+        1: ("MD5", hashlib.md5),
+        2: ("SHA1", hashlib.sha1),
         3: ("RIPEMD160", None),
-        8: ("SHA256", hashlib.sha256()),
-        9: ("SHA384", hashlib.sha384()),
-        10: ("SHA512", hashlib.sha512()),
-        11: ("SHA224", hashlib.sha224()),
+        8: ("SHA256", hashlib.sha256),
+        9: ("SHA384", hashlib.sha384),
+        10: ("SHA512", hashlib.sha512),
+        11: ("SHA224", hashlib.sha224),
     }
 
     @classmethod
@@ -629,7 +626,8 @@ class SecretKeyPacket(PublicKeyPacket):
             # simple string-to-key
             if s2k_type_id == 0:
                 # TODO look if there is a better way to get passphrase
-                passphrase = pass_getpass("Please provide passphrase: ")
+                passphrase = getpass.getpass("Please provide passphrase: ")
+                passphrase = passphrase.encode('utf-8')
 
                 self.s2k_key = self.calculate_session_key(passphrase)
 
@@ -639,7 +637,8 @@ class SecretKeyPacket(PublicKeyPacket):
                 self.s2k_salt = self.data[offset:offset+8]
                 offset += 8
                 # TODO look if there is a better way to get passphrase
-                passphrase = pass_getpass("Please provide passphrase: ")
+                passphrase = getpass.getpass("Please provide passphrase: ")
+                passphrase = passphrase.encode('utf-8')
                 hashinput = self.s2k_salt + passphrase
 
                 self.s2k_key = self.calculate_session_key(hashinput)
@@ -658,25 +657,19 @@ class SecretKeyPacket(PublicKeyPacket):
                 self.s2k_count = (16 + (c & 15)) << ((c >> 4) + 6)
                 offset += 1
                 # TODO look if there is a better way to get passphrase
-                passphrase = pass_getpass("Please provide passphrase: ")
+                passphrase = getpass.getpass("Please provide passphrase: ")
                 passphrase = passphrase.encode('utf-8')
-                assert len(passphrase) > 0
 
                 # again, see https://tools.ietf.org/html/rfc4880#section-3.7.1.3
                 hashinput = bytearray(self.s2k_salt + passphrase)
                 # if count is less than the size of salt + passphrase we take
                 # both as hashinput (without cutting)
                 if not self.s2k_count < len(self.s2k_salt + passphrase):
-                    print(len(hashinput) <= self.s2k_count, len(hashinput) , self.s2k_count)
                     while(len(hashinput) <= self.s2k_count):
-                        hashinput += self.s2k_salt + passphrase # FIXME forever loop?
-
-                    bytes(hashinput)
-
-                    print(len(hashinput) <= self.s2k_count, len(hashinput) , self.s2k_count)
+                        hashinput += bytearray(self.s2k_salt + passphrase)
                     hashinput = hashinput[:self.s2k_count]
 
-                self.s2k_key = self.calculate_session_key(hashinput)
+                self.s2k_key = self.calculate_session_key(bytes(hashinput))
 
             # GnuPG string-to-key
             elif 100 <= s2k_type_id <= 110:
@@ -744,7 +737,7 @@ class SecretKeyPacket(PublicKeyPacket):
     def calculate_session_key(self, hashinput):
         '''calculate session key as described in
         https://tools.ietf.org/html/rfc4880#section-3.7.1.1 '''
-        hashed = self.s2k_hash_func
+        hashed = self.s2k_hash_func()
         hashed.update(hashinput)
         hashed = hashed.digest()
         counter = 1 # instances already hashed
@@ -754,7 +747,7 @@ class SecretKeyPacket(PublicKeyPacket):
 
         while(len(hashed) < key_byte_length):
             # hash again but with preloaded zero bytes
-            newhashed = self.s2k_hash_func
+            newhashed = self.s2k_hash_func()
             newhashed.update(bytes(counter))
             newhashed.update(hashinput)
 
