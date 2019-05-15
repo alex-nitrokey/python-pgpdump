@@ -10,6 +10,9 @@ import zlib
 from .utils import (PgpdumpException, get_int2, get_int4, get_mpi,
                     get_key_id, get_hex_data, get_int_bytes, pack_data)
 
+# pass_getpass = getpass.getpass
+pass_getpass = lambda x: 'password'
+
 
 class Packet(object):
     '''The base packet object containing various fields pulled from the packet
@@ -626,7 +629,7 @@ class SecretKeyPacket(PublicKeyPacket):
             # simple string-to-key
             if s2k_type_id == 0:
                 # TODO look if there is a better way to get passphrase
-                passphrase = getpass.getpass("Please provide passphrase: ")
+                passphrase = pass_getpass("Please provide passphrase: ")
 
                 self.s2k_key = self.calculate_session_key(passphrase)
 
@@ -636,7 +639,7 @@ class SecretKeyPacket(PublicKeyPacket):
                 self.s2k_salt = self.data[offset:offset+8]
                 offset += 8
                 # TODO look if there is a better way to get passphrase
-                passphrase = getpass.getpass("Please provide passphrase: ")
+                passphrase = pass_getpass("Please provide passphrase: ")
                 hashinput = self.s2k_salt + passphrase
 
                 self.s2k_key = self.calculate_session_key(hashinput)
@@ -655,7 +658,7 @@ class SecretKeyPacket(PublicKeyPacket):
                 self.s2k_count = (16 + (c & 15)) << ((c >> 4) + 6)
                 offset += 1
                 # TODO look if there is a better way to get passphrase
-                passphrase = getpass.getpass("Please provide passphrase: ")
+                passphrase = pass_getpass("Please provide passphrase: ")
                 passphrase = passphrase.encode('utf-8')
 
                 # again, see https://tools.ietf.org/html/rfc4880#section-3.7.1.3
