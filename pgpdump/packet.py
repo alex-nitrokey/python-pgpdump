@@ -56,8 +56,14 @@ class AlgoLookup(object):
         21: "Diffie-Hellman",
     }
 
-    # OID stuff? Not sure if it should be here, but why not?
+    @classmethod
+    def lookup_pub_algorithm(cls, alg):
+        if 100 <= alg <= 110:
+            return "Private/Experimental algorithm"
+        return cls.pub_algorithms.get(alg, "Unknown")
+
     # TODO: Add more OIDS.
+    # raw_oid: (curve name, bitlen)
     oids = {
         b'2B81040023': ("NIST P-521", 521),
         b'2B81040022': ("NIST P-384", 384),
@@ -69,14 +75,16 @@ class AlgoLookup(object):
     }
 
     @classmethod
-    def lookup_pub_algorithm(cls, alg):
-        if 100 <= alg <= 110:
-            return "Private/Experimental algorithm"
-        return cls.pub_algorithms.get(alg, "Unknown")
+    def _lookup_oid(cls, oid):
+        return cls.oids.get(oid, ("Unknown", None))
 
     @classmethod
-    def lookup_oid(cls, oid):
-        return cls.oids.get(oid, ("Unknown", None))
+    def lookup_oid_curve(cls, oid):
+        return cls._lookup_oid(oid)[0]
+
+    @classmethod
+    def lookup_oid_bitlen(cls, oid):
+        return cls._lookup_oid(oid)[1]
 
     hash_algorithms = {
         # (Name, hashlib function)
@@ -389,20 +397,20 @@ class PublicKeyPacket(Packet, AlgoLookup):
         self.expiration_time = None
         self.raw_pub_algorithm = None
         self.pub_algorithm_type = None
-        self.modulus = None
-        self.modulus_bitlen = None
-        self.exponent = None
+        self.bitlen = None
+        # dsa information
         self.prime = None
         self.group_order = None
         self.group_gen = None
         self.key_value = None
-
-        self.bitlen = None
-
-        # ECC information
+        # rsa information
+        self.modulus = None
+        self.modulus_bitlen = None
+        self.exponent = None
+        # ecc information
         self.raw_oid = None
         self.raw_oid_length = None
-        self.oid = None
+        self.curve = None
 
         super(PublicKeyPacket, self).__init__(*args, **kwargs)
 
@@ -498,7 +506,7 @@ class PublicKeyPacket(Packet, AlgoLookup):
             self.group_gen, offset = get_mpi(self.data, offset)
             self.key_value, offset = get_mpi(self.data, offset)
         elif self.raw_pub_algorithm == 18:
-            self.pub_algorithm_type = "ecc"
+            self.pub_algorithm_type = "ecdh"
             offset = self.parse_oid_data(offset)
         elif self.raw_pub_algorithm == 19:
             self.pub_algorithm_type = "ecdsa"
@@ -521,12 +529,15 @@ class PublicKeyPacket(Packet, AlgoLookup):
 
         oid = get_hex_data(self.data, offset, oid_length)
         offset += oid_length
+
         self.raw_oid = oid
         self.raw_oid_length = oid_length
+        self.curve = self.lookup_oid_curve(oid)
+        self.bitlen = self.lookup_oid_bitlen(oid)
 
-        oid_value = self.lookup_oid(self.raw_oid)
-        self.oid = oid_value[0]
-        self.bitlen = oid_value[1]
+        # FIXME add EC point representing the pubkey as described in
+        # https://tools.ietf.org/html/rfc6637#section-9
+        # for ECDH and ECDSA keys respectively
 
         return offset
 
