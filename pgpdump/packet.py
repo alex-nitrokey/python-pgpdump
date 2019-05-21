@@ -593,7 +593,7 @@ class SecretKeyPacket(PublicKeyPacket):
             # plaintext key data
             offset += self.parse_private_key_material(self.data[offset:])
             self.checksum = get_int2(self.data, offset)
-            offset +=2
+            offset += 2
 
         elif self.s2k_id in (254, 255):
             # encrypted key data
@@ -620,7 +620,6 @@ class SecretKeyPacket(PublicKeyPacket):
             offset += 1
             self.s2k_hash = self.lookup_hash_algorithm(hash_id)
             self.s2k_hash_func = self.lookup_hash_algorithm_func(hash_id)
-
             has_iv = True
 
             # simple string-to-key
@@ -628,7 +627,6 @@ class SecretKeyPacket(PublicKeyPacket):
                 # TODO look if there is a better way to get passphrase
                 passphrase = getpass.getpass("Please provide passphrase: ")
                 passphrase = passphrase.encode('utf-8')
-
                 self.s2k_key = self.calculate_session_key(passphrase)
 
             # salted string-to-key
@@ -640,7 +638,6 @@ class SecretKeyPacket(PublicKeyPacket):
                 passphrase = getpass.getpass("Please provide passphrase: ")
                 passphrase = passphrase.encode('utf-8')
                 hashinput = self.s2k_salt + passphrase
-
                 self.s2k_key = self.calculate_session_key(hashinput)
 
             # reserved
@@ -668,7 +665,6 @@ class SecretKeyPacket(PublicKeyPacket):
                     while(len(hashinput) <= self.s2k_count):
                         hashinput += bytearray(self.s2k_salt + passphrase)
                     hashinput = hashinput[:self.s2k_count]
-
                 self.s2k_key = self.calculate_session_key(bytes(hashinput))
 
             # GnuPG string-to-key
@@ -768,8 +764,7 @@ class SecretKeyPacket(PublicKeyPacket):
             backend = default_backend()
             cipher = Cipher(algorithm, mode, backend)
             decryptor = cipher.decryptor()
-            plaintext = data
-            # plaintext = decryptor.update(data) + decryptor.finalize()
+            plaintext = decryptor.update(data) + decryptor.finalize()
 
             # verify successful decryption based on checksum
             # see https://tools.ietf.org/html/rfc4880#section-5.5.3
@@ -785,7 +780,6 @@ class SecretKeyPacket(PublicKeyPacket):
             # plaintext could not be verified
             else:
                 print("Could not decrypt key material! Procced without parsing.")
-                assert False
                 return None
         else:
             # TODO
