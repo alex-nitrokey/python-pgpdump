@@ -15,13 +15,15 @@ class Packet(object):
     '''The base packet object containing various fields pulled from the packet
     header as well as a slice of the packet data.'''
 
-    def __init__(self, raw, name, new, data, original_data):
+    def __init__(self, raw, name, new, data, original_data, secret_keys, passphrase):
         self.raw = raw
         self.name = name
         self.new = new
         self.length = len(data)
         self.data = data
         self.original_data = original_data
+        self.secret_keys = secret_keys      # shall secret keys be parsed?
+        self.passphrase = passphrase        # passphrase if provided 
 
         # now let subclasses work their magic
         self.parse()
@@ -624,21 +626,29 @@ class SecretKeyPacket(PublicKeyPacket):
 
             # simple string-to-key
             if s2k_type_id == 0:
-                # TODO look if there is a better way to get passphrase
-                passphrase = getpass.getpass("Please provide passphrase: ")
-                passphrase = passphrase.encode('utf-8')
-                self.s2k_key = self.calculate_session_key(passphrase)
+                # calculate session key if secret keys should be parsed too
+                if self.secret_keys:
+                    if self.passphrase is None:
+                        passphrase = getpass.getpass("Please provide passphrase: ")
+                    else:
+                        passphrase = self.passphrase
+                    passphrase = passphrase.encode('utf-8')
+                    self.s2k_key = self.calculate_session_key(passphrase)
 
             # salted string-to-key
             elif s2k_type_id == 1:
                 # salt
                 self.s2k_salt = self.data[offset:offset+8]
                 offset += 8
-                # TODO look if there is a better way to get passphrase
-                passphrase = getpass.getpass("Please provide passphrase: ")
-                passphrase = passphrase.encode('utf-8')
-                hashinput = self.s2k_salt + passphrase
-                self.s2k_key = self.calculate_session_key(hashinput)
+                # calculate session key if secret keys should be parsed too
+                if self.secret_keys:
+                    if self.passphrase is None:
+                        passphrase = getpass.getpass("Please provide passphrase: ")
+                    else:
+                        passphrase = self.passphrase
+                    passphrase = passphrase.encode('utf-8')
+                    hashinput = self.s2k_salt + passphrase.encode('utf-8')
+                    self.s2k_key = self.calculate_session_key(hashinput)
 
             # reserved
             elif s2k_type_id == 2:
@@ -653,19 +663,22 @@ class SecretKeyPacket(PublicKeyPacket):
                 c = self.data[offset]
                 self.s2k_count = (16 + (c & 15)) << ((c >> 4) + 6)
                 offset += 1
-                # TODO look if there is a better way to get passphrase
-                passphrase = getpass.getpass("Please provide passphrase: ")
-                passphrase = passphrase.encode('utf-8')
-
-                # again, see https://tools.ietf.org/html/rfc4880#section-3.7.1.3
-                hashinput = bytearray(self.s2k_salt + passphrase)
-                # if count is less than the size of salt + passphrase we take
-                # both as hashinput (without cutting)
-                if not self.s2k_count < len(self.s2k_salt + passphrase):
-                    while(len(hashinput) <= self.s2k_count):
-                        hashinput += bytearray(self.s2k_salt + passphrase)
-                    hashinput = hashinput[:self.s2k_count]
-                self.s2k_key = self.calculate_session_key(bytes(hashinput))
+                # calculate session key if secret keys should be parsed too
+                if self.secret_keys:
+                    if self.passphrase is None:
+                        passphrase = getpass.getpass("Please provide passphrase: ")
+                    else:
+                        passphrase = self.passphrase
+                    passphrase = passphrase.encode('utf-8')
+                    # again, see https://tools.ietf.org/html/rfc4880#section-3.7.1.3
+                    hashinput = bytearray(self.s2k_salt + passphrase)
+                    # if count is less than the size of salt + passphrase we take
+                    # both as hashinput (without cutting)
+                    if not self.s2k_count < len(self.s2k_salt + passphrase):
+                        while(len(hashinput) <= self.s2k_count):
+                            hashinput += bytearray(self.s2k_salt + passphrase)
+                        hashinput = hashinput[:self.s2k_count]
+                    self.s2k_key = self.calculate_session_key(bytes(hashinput))
 
             # GnuPG string-to-key
             elif 100 <= s2k_type_id <= 110:
@@ -798,6 +811,8 @@ class SecretKeyPacket(PublicKeyPacket):
             data = self.decrypt_key_material(data)
             if data is None: # key material could not be decrypted, stop parsing
                 return 0
+        elif self.s2k_id > 0: # returns if key material is encrypted but no key is present
+            return 0
 
         # parse data
         if self.raw_pub_algorithm in (1, 2, 3):
@@ -1047,7 +1062,7 @@ def old_tag_length(data, start):
     return (offset, length)
 
 
-def construct_packet(data, header_start):
+def construct_packet(data, header_start, secret_keys=False, passphrase=None):
     """Returns a (length, packet) tuple constructed from 'data' at index
     'header_start'. If there is a next packet, it will be found at
     header_start + length."""
@@ -1102,5 +1117,5 @@ def construct_packet(data, header_start):
             break
     packet_data = bytes(packet_data)
     original_data = bytes(original_data)
-    packet = PacketType(tag, name, new, packet_data, original_data)
+    packet = PacketType(tag, name, new, packet_data, original_data, secret_keys, passphrase)
     return consumed, packet
