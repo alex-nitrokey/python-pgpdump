@@ -44,8 +44,6 @@ class AsciiData(BinaryData):
     first PGP magic header and extracts the data contained within.'''
     def __init__(self, data, secret_keys=False, passphrase=None):
         self.original_data = data
-        self.secret_keys = secret_keys
-        self.passphrase = passphrase
         if not isinstance(data, bytes):
             data = data.encode()
         data = self.strip_magic(data)
@@ -58,7 +56,7 @@ class AsciiData(BinaryData):
                 raise PgpdumpException(
                         "CRC failure: known 0x%x, actual 0x%x" % (
                             known_crc, actual_crc))
-        super(AsciiData, self).__init__(data)
+        super(AsciiData, self).__init__(data, secret_keys, passphrase)
 
     @staticmethod
     def strip_magic(data):
