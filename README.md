@@ -1,6 +1,6 @@
 # python-pgpdump: a Python library for parsing PGP packets
 
-[![Build Status](https://travis-ci.org/nitrokey-alex/python-pgpdump.svg?branch=master)](https://travis-ci.org/SkierPGP/python-pgpdump)
+[![Build Status](https://travis-ci.org/alex-nitrokey/python-pgpdump.svg?branch=master)](https://travis-ci.org/alex-nitrokey/python-pgpdump)
 
 
 This is based on the C version published at:
