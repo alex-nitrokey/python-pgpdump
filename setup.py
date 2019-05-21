@@ -18,7 +18,7 @@ setup(
     author = __author__,
     license = 'BSD',
     description = 'PGP packet parser library',
-    url = 'https://github.com/SkierPGP/python-pgpdump',
+    url = 'https://github.com/nitrokey-alex/python-pgpdump',
     keywords = 'pgp gpg rfc2440 rfc4880 crypto cryptography',
     classifiers = classifiers,
     packages = ['pgpdump']
