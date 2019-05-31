@@ -63,15 +63,21 @@ class AlgoLookup(object):
         return cls.pub_algorithms.get(alg, "Unknown")
 
     # TODO: Add more OIDS.
-    # raw_oid: (curve name, bitlen)
+    # raw_oid: (oid, curve name, bitlen)
     oids = {
-        b'2B81040023': ("NIST P-521", 521),
-        b'2B81040022': ("NIST P-384", 384),
-        b'2A8648CE3D030107': ("NIST P-256", 256),
-        b'2B240303020801010D': ("Brainpool P512 r1", 512),
-        b'2B240303020801010B': ("Brainpool P384 r1", 384),
-        b'2B2403030208010107': ("Brainpool P256 r1", 256),
-        b'2B06010401DA470F01': ("Curve 25519", None)
+        b'2B81040023':
+            ([0x2B, 0x81, 0x04, 0x00, 0x23], "NIST P-521", 521),
+        b'2B81040022':
+            ([0x2B, 0x81, 0x04, 0x00, 0x22], "NIST P-384", 384),
+        b'2A8648CE3D030107':
+            ([0x2A, 0x86, 0x48, 0xCE, 0x3D, 0x03, 0x01, 0x07], "NIST P-256", 256),
+        b'2B240303020801010D':
+            ([0x2B, 0x24, 0x03, 0x03, 0x02, 0x08, 0x01, 0x01, 0x0D], "Brainpool P512 r1", 512),
+        b'2B240303020801010B':
+            ([0x2b, 0x24, 0x03, 0x03, 0x02, 0x08, 0x01, 0x01, 0x0b], "Brainpool P384 r1", 384),
+        b'2B2403030208010107':
+            ([0x2b, 0x24, 0x03, 0x03, 0x02, 0x08, 0x01, 0x01, 0x07], "Brainpool P256 r1", 256),
+        b'2B06010401DA470F01': (None, "Curve 25519", None)
     }
 
     @classmethod
@@ -79,12 +85,16 @@ class AlgoLookup(object):
         return cls.oids.get(oid, ("Unknown", None))
 
     @classmethod
-    def lookup_oid_curve(cls, oid):
+    def lookup_oid(cls, oid):
         return cls._lookup_oid(oid)[0]
 
     @classmethod
-    def lookup_oid_bitlen(cls, oid):
+    def lookup_oid_curve(cls, oid):
         return cls._lookup_oid(oid)[1]
+
+    @classmethod
+    def lookup_oid_bitlen(cls, oid):
+        return cls._lookup_oid(oid)[2]
 
     hash_algorithms = {
         # (Name, hashlib function)
@@ -409,7 +419,7 @@ class PublicKeyPacket(Packet, AlgoLookup):
         self.exponent = None
         # ecc information
         self.raw_oid = None
-        self.raw_oid_length = None
+        self.oid = None
         self.curve = None
         self.point_q = None
         self.kdf_hash = None
@@ -522,7 +532,6 @@ class PublicKeyPacket(Packet, AlgoLookup):
             offset = self.parse_oid_data(offset)
             #self.point_q, offset = get_mpi(self.data, offset)
             # TODO Look for specifics of curve25519 if any
-            # https://tools.ietf.org/html/rfc6637#section-9
         elif 100 <= self.raw_pub_algorithm <= 110:
             # Private/Experimental algorithms, just move on
             pass
@@ -533,6 +542,7 @@ class PublicKeyPacket(Packet, AlgoLookup):
         return offset
 
     def parse_oid_data(self, offset):
+        # see https://tools.ietf.org/html/rfc6637#section-9
         oid_length = self.data[offset]
         offset += 1
 
@@ -540,7 +550,7 @@ class PublicKeyPacket(Packet, AlgoLookup):
         offset += oid_length
 
         self.raw_oid = oid
-        self.raw_oid_length = oid_length
+        self.oid = self.lookup_oid(oid)
         self.curve = self.lookup_oid_curve(oid)
         self.bitlen = self.lookup_oid_bitlen(oid)
 
