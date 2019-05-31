@@ -653,6 +653,64 @@ class SecretKeyPacketTestCase(TestCase, Helper):
                 self.assertEqual("Unknown", packet.s2k_hash)
                 self.assertEqual(None, packet.s2k_iv)
 
+class EllipticCurveTestCase(TestCase, Helper):
+    def test_parse_with_decryption(self):
+        rawdata = self.load_data('ecc_encrypted.gpg')
+        data = BinaryData(rawdata, secret_keys=True, passphrase="password")
+        packets = list(data.packets())
+        self.assertEqual(7, len(packets))
+        subs_seen = 0
+        for packet in packets:
+            self.assertFalse(packet.new)
+            if isinstance(packet, SecretSubkeyPacket):
+                if subs_seen == 0:
+                    self.assertEqual("ecdh", packet.pub_algorithm_type)
+                    self.assertEqual("NIST P-256", packet.curve)
+                    self.assertEqual(254, packet.s2k_id)
+                    self.assertEqual("Iterated and Salted S2K", packet.s2k_type)
+                    self.assertEqual("AES with 128-bit key", packet.s2k_cipher)
+                    self.assertEqual("SHA1", packet.s2k_hash)
+                    self.assertEqual("AES with 128-bit key", packet.kdf_wrapalgo)
+                    self.assertRegex("SHA256", packet.kdf_hash)
+                    self.assertEqual(bytearray(b"\x78\x6d\xef\x08\xfa\x9b\x56\x59"), packet.s2k_salt)
+                    self.assertEqual(28311552, packet.s2k_count)
+                    self.assertEqual(
+                        bytearray(b"\x69\xc2\x68\x99\x24\x7e\x92\xb9\xef\x54\x90\x8c\xee\xd5\xc6\x1f"),
+                        packet.s2k_iv)
+                    self.assertEqual(60847587359509871693348204363743321775971164599256235759414459546653631611529142239218205958137558240350795129315392112029882542591919766718800104409262372, packet.point_q)
+                    self.assertEqual(55720486738090255346749591914685028996401302864030399621406699639213008763959, packet.private_d)
+                    self.assertEqual(b'DB8131F15297D679F8D3892B5E551CF8CE2FD3E7', packet.fingerprint)
+                    subs_seen += 1
+                else:
+                    self.assertEqual("ecdsa", packet.pub_algorithm_type)
+                    self.assertEqual("Brainpool P256 r1", packet.curve)
+                    self.assertEqual(254, packet.s2k_id)
+                    self.assertEqual("Iterated and Salted S2K", packet.s2k_type)
+                    self.assertEqual("AES with 128-bit key", packet.s2k_cipher)
+                    self.assertEqual("SHA1", packet.s2k_hash)
+                    self.assertEqual(bytearray(b"\xea\xc4\x6e\x02\x5d\xd0\x03\xc0"), packet.s2k_salt)
+                    self.assertEqual(28311552, packet.s2k_count)
+                    self.assertEqual(
+                        bytearray(b"\xc2\x90\x81\xa3\x99\x8c\x7f\xaf\x46\x6a\x8d\xbc\x7e\x9b\x02\xd0"),
+                        packet.s2k_iv)
+                    self.assertEqual(61123302340171845673889019232255994071820340743193990019879367428466517697750227033886079901156536636551607718612458727003711929326593246061224475278688353, packet.point_q)
+                    self.assertEqual(58943201301004546689478726307889505814853557172638532197351536147387509515362, packet.private_d)
+                    self.assertEqual(b'D6CDA1DD0A7CA1D653C3F9ABA68D5C0B3DAF53CE', packet.fingerprint)
+            elif isinstance(packet, SecretKeyPacket):
+                self.assertEqual("ecdsa", packet.pub_algorithm_type)
+                self.assertEqual("NIST P-256", packet.curve)
+                self.assertEqual(254, packet.s2k_id)
+                self.assertEqual("Iterated and Salted S2K", packet.s2k_type)
+                self.assertEqual("AES with 128-bit key", packet.s2k_cipher)
+                self.assertEqual("SHA1", packet.s2k_hash)
+                self.assertEqual(bytearray(b"\x11\x2b\xd4\xba\x91\x8b\x97\xbc"), packet.s2k_salt)
+                self.assertEqual(28311552, packet.s2k_count)
+                self.assertEqual(
+                    bytearray(b"\xd9\x5b\x9b\xa5\xc4\x92\xe0\x17\x07\x77\x43\x8d\x46\xf5\x82\xff"),
+                    packet.s2k_iv)
+                self.assertEqual(60151785822551309368517310407206789096699074153486904473288170198587060401748197137933769333804491078674810607956244241888631169281225495410113452867492752, packet.point_q)
+                self.assertEqual(79708619561552795594821242702836405022166909448726484446501657545687562933583, packet.private_d)
+                self.assertEqual(b'ED3969EDD0574FF5C1E3A8D47C1C5EB897C14A8C', packet.fingerprint)
 
 if __name__ == '__main__':
     main()
