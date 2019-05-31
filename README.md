@@ -19,5 +19,6 @@ time. Currently supported things include:
 * ASCII-armor decoding and CRC check
 * Compressed packet decompression automatically
 * Decryption of encrypted secret key material
+* Parse ECC keys (Brainpool and NIST-P)
 
 This package is designed for Python 3 only. 

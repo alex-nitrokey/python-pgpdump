@@ -56,27 +56,45 @@ class AlgoLookup(object):
         21: "Diffie-Hellman",
     }
 
-    # OID stuff? Not sure if it should be here, but why not?
-    # TODO: Add more OIDS.
-    oids = {
-        b'2B81040023': ("NIST P-521", 521),
-        b'2B81040022': ("NIST P-384", 384),
-        b'2A8648CE3D030107': ("NIST P-256", 256),
-        b'2B240303020801010D': ("Brainpool P512 r1", 512),
-        b'2B240303020801010B': ("Brainpool P384 r1", 384),
-        b'2B2403030208010107': ("Brainpool P256 r1", 256),
-        b'2B06010401DA470F01': ("Curve 25519", None)
-    }
-
     @classmethod
     def lookup_pub_algorithm(cls, alg):
         if 100 <= alg <= 110:
             return "Private/Experimental algorithm"
         return cls.pub_algorithms.get(alg, "Unknown")
 
+    # TODO: Add more OIDS.
+    # raw_oid: (oid, curve name, bitlen)
+    oids = {
+        b'2B81040023':
+            ([0x2B, 0x81, 0x04, 0x00, 0x23], "NIST P-521", 521),
+        b'2B81040022':
+            ([0x2B, 0x81, 0x04, 0x00, 0x22], "NIST P-384", 384),
+        b'2A8648CE3D030107':
+            ([0x2A, 0x86, 0x48, 0xCE, 0x3D, 0x03, 0x01, 0x07], "NIST P-256", 256),
+        b'2B240303020801010D':
+            ([0x2B, 0x24, 0x03, 0x03, 0x02, 0x08, 0x01, 0x01, 0x0D], "Brainpool P512 r1", 512),
+        b'2B240303020801010B':
+            ([0x2b, 0x24, 0x03, 0x03, 0x02, 0x08, 0x01, 0x01, 0x0b], "Brainpool P384 r1", 384),
+        b'2B2403030208010107':
+            ([0x2b, 0x24, 0x03, 0x03, 0x02, 0x08, 0x01, 0x01, 0x07], "Brainpool P256 r1", 256),
+        b'2B06010401DA470F01': (None, "Curve 25519", None)
+    }
+
+    @classmethod
+    def _lookup_oid(cls, oid):
+        return cls.oids.get(oid, ("Unknown", None))
+
     @classmethod
     def lookup_oid(cls, oid):
-        return cls.oids.get(oid, ("Unknown", None))
+        return cls._lookup_oid(oid)[0]
+
+    @classmethod
+    def lookup_oid_curve(cls, oid):
+        return cls._lookup_oid(oid)[1]
+
+    @classmethod
+    def lookup_oid_bitlen(cls, oid):
+        return cls._lookup_oid(oid)[2]
 
     hash_algorithms = {
         # (Name, hashlib function)
@@ -389,20 +407,23 @@ class PublicKeyPacket(Packet, AlgoLookup):
         self.expiration_time = None
         self.raw_pub_algorithm = None
         self.pub_algorithm_type = None
-        self.modulus = None
-        self.modulus_bitlen = None
-        self.exponent = None
+        self.bitlen = None
+        # dsa information
         self.prime = None
         self.group_order = None
         self.group_gen = None
         self.key_value = None
-
-        self.bitlen = None
-
-        # ECC information
+        # rsa information
+        self.modulus = None
+        self.modulus_bitlen = None
+        self.exponent = None
+        # ecc information
         self.raw_oid = None
-        self.raw_oid_length = None
         self.oid = None
+        self.curve = None
+        self.point_q = None
+        self.kdf_hash = None
+        self.kdf_wrapalgo = None
 
         super(PublicKeyPacket, self).__init__(*args, **kwargs)
 
@@ -498,14 +519,19 @@ class PublicKeyPacket(Packet, AlgoLookup):
             self.group_gen, offset = get_mpi(self.data, offset)
             self.key_value, offset = get_mpi(self.data, offset)
         elif self.raw_pub_algorithm == 18:
-            self.pub_algorithm_type = "ecc"
+            self.pub_algorithm_type = "ecdh"
             offset = self.parse_oid_data(offset)
+            self.point_q, offset = get_mpi(self.data, offset)
+            offset = self.parse_kdf(offset)
         elif self.raw_pub_algorithm == 19:
             self.pub_algorithm_type = "ecdsa"
             offset = self.parse_oid_data(offset)
+            self.point_q, offset = get_mpi(self.data, offset)
         elif self.raw_pub_algorithm == 22:
             self.pub_algorithm_type = "curve25519"
             offset = self.parse_oid_data(offset)
+            #self.point_q, offset = get_mpi(self.data, offset)
+            # TODO Look for specifics of curve25519 if any
         elif 100 <= self.raw_pub_algorithm <= 110:
             # Private/Experimental algorithms, just move on
             pass
@@ -516,17 +542,33 @@ class PublicKeyPacket(Packet, AlgoLookup):
         return offset
 
     def parse_oid_data(self, offset):
+        # see https://tools.ietf.org/html/rfc6637#section-9
         oid_length = self.data[offset]
         offset += 1
 
         oid = get_hex_data(self.data, offset, oid_length)
         offset += oid_length
-        self.raw_oid = oid
-        self.raw_oid_length = oid_length
 
-        oid_value = self.lookup_oid(self.raw_oid)
-        self.oid = oid_value[0]
-        self.bitlen = oid_value[1]
+        self.raw_oid = oid
+        self.oid = self.lookup_oid(oid)
+        self.curve = self.lookup_oid_curve(oid)
+        self.bitlen = self.lookup_oid_bitlen(oid)
+
+        return offset
+
+    def parse_kdf(self, offset):
+        # see https://tools.ietf.org/html/rfc6637#section-9
+        kdf_length = self.data[offset]
+        offset += 1
+        offset += 1 # reserved for future extensions
+
+        hash_id = self.data[offset]
+        self.kdf_hash = self.lookup_hash_algorithm(hash_id)
+        offset += 1
+
+        wrapalgo_id = self.data[offset]
+        self.kdf_wrapalgo = self.lookup_sym_algorithm(wrapalgo_id)
+        offset += 1
 
         return offset
 
@@ -577,6 +619,9 @@ class SecretKeyPacket(PublicKeyPacket):
         self.multiplicative_inverse = None
         # DSA and Elgamal
         self.exponent_x = None
+        # EC field
+        self.private_d = None
+
         super(SecretKeyPacket, self).__init__(*args, **kwargs)
 
     @classmethod
@@ -830,6 +875,15 @@ class SecretKeyPacket(PublicKeyPacket):
             self.pub_algorithm_type = "elg"
             # x
             self.exponent_x, offset = get_mpi(data, offset)
+        elif self.raw_pub_algorithm == 18:
+            self.pub_algorithm_type = "ecdh"
+            self.private_d, offset = get_mpi(data, offset)
+        elif self.raw_pub_algorithm == 19:
+            self.pub_algorithm_type = "ecdsa"
+            self.private_d, offset = get_mpi(data, offset)
+        elif self.raw_pub_algorithm == 22:
+            self.pub_algorithm_type = "curve25519"
+            # TODO lookup curve25519 specific stuff
         elif 100 <= self.raw_pub_algorithm <= 110:
             # Private/Experimental algorithms, just move on
             pass
