@@ -411,6 +411,9 @@ class PublicKeyPacket(Packet, AlgoLookup):
         self.raw_oid = None
         self.raw_oid_length = None
         self.curve = None
+        self.point_q = None
+        self.kdf_hash = None
+        self.kdf_wrapalgo = None
 
         super(PublicKeyPacket, self).__init__(*args, **kwargs)
 
@@ -508,12 +511,18 @@ class PublicKeyPacket(Packet, AlgoLookup):
         elif self.raw_pub_algorithm == 18:
             self.pub_algorithm_type = "ecdh"
             offset = self.parse_oid_data(offset)
+            self.point_q, offset = get_mpi(self.data, offset)
+            offset = self.parse_kdf(offset)
         elif self.raw_pub_algorithm == 19:
             self.pub_algorithm_type = "ecdsa"
             offset = self.parse_oid_data(offset)
+            self.point_q, offset = get_mpi(self.data, offset)
         elif self.raw_pub_algorithm == 22:
             self.pub_algorithm_type = "curve25519"
             offset = self.parse_oid_data(offset)
+            #self.point_q, offset = get_mpi(self.data, offset)
+            # TODO Look for specifics of curve25519 if any
+            # https://tools.ietf.org/html/rfc6637#section-9
         elif 100 <= self.raw_pub_algorithm <= 110:
             # Private/Experimental algorithms, just move on
             pass
@@ -535,9 +544,21 @@ class PublicKeyPacket(Packet, AlgoLookup):
         self.curve = self.lookup_oid_curve(oid)
         self.bitlen = self.lookup_oid_bitlen(oid)
 
-        # FIXME add EC point representing the pubkey as described in
-        # https://tools.ietf.org/html/rfc6637#section-9
-        # for ECDH and ECDSA keys respectively
+        return offset
+
+    def parse_kdf(self, offset):
+        # see https://tools.ietf.org/html/rfc6637#section-9
+        kdf_length = self.data[offset]
+        offset += 1
+        offset += 1 # reserved for future extensions
+
+        hash_id = self.data[offset]
+        self.kdf_hash = self.lookup_hash_algorithm(hash_id)
+        offset += 1
+
+        wrapalgo_id = self.data[offset]
+        self.kdf_wrapalgo = self.lookup_sym_algorithm(wrapalgo_id)
+        offset += 1
 
         return offset
 
@@ -588,6 +609,9 @@ class SecretKeyPacket(PublicKeyPacket):
         self.multiplicative_inverse = None
         # DSA and Elgamal
         self.exponent_x = None
+        # EC field
+        self.private_d = None
+
         super(SecretKeyPacket, self).__init__(*args, **kwargs)
 
     @classmethod
@@ -841,6 +865,15 @@ class SecretKeyPacket(PublicKeyPacket):
             self.pub_algorithm_type = "elg"
             # x
             self.exponent_x, offset = get_mpi(data, offset)
+        elif self.raw_pub_algorithm == 18:
+            self.pub_algorithm_type = "ecdh"
+            self.private_d, offset = get_mpi(data, offset)
+        elif self.raw_pub_algorithm == 19:
+            self.pub_algorithm_type = "ecdsa"
+            self.private_d, offset = get_mpi(data, offset)
+        elif self.raw_pub_algorithm == 22:
+            self.pub_algorithm_type = "curve25519"
+            # TODO lookup curve25519 specific stuff
         elif 100 <= self.raw_pub_algorithm <= 110:
             # Private/Experimental algorithms, just move on
             pass
