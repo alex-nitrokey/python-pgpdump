@@ -22,3 +22,6 @@ time. Currently supported things include:
 * Parse ECC keys (Brainpool and NIST-P)
 
 This package is designed for Python 3 only. 
+
+## TODO
+* Add support for curve25119 (see `TODO` comments in [pgpdump/packet.py](pgpdump/packet.py))

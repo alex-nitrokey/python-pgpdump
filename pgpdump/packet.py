@@ -761,7 +761,6 @@ class SecretKeyPacket(PublicKeyPacket):
                                                       serial_len)
                     return offset
                 else:
-                    # TODO implement other modes?
                     raise PgpdumpException(
                         "Unsupported GnuPG S2K extension, encountered mode %d" % mode)
             else:
@@ -840,12 +839,13 @@ class SecretKeyPacket(PublicKeyPacket):
                 print("Could not decrypt key material! Procced without parsing.")
                 return None
         else:
-            # TODO
+            # V3 keys are not supported by GnuPG since 2.1 because of security reasons
+            # If one wishs to implement them nevertheless, start here...
             # "With V3 keys, the MPI bit count prefix (i.e., the first two octets) 
             # is not encrypted.  Only the MPI non-prefix data is encrypted."
             # See https://tools.ietf.org/html/rfc4880#section-5.5.3 '''
 
-            print("Can not decrypt key material: Currently only possible for v4 keys.")
+            print("Can not decrypt key material: Only OpenPGP keys v4 are supported.")
             return None
 
     def parse_private_key_material(self, data):
