@@ -428,7 +428,9 @@ class PublicKeyPacket(Packet, AlgoLookup):
             self.group_gen, offset = get_mpi(self.data, offset)
             self.key_value, offset = get_mpi(self.data, offset)
         else:
-            # If we don't know how to handle the algorithm, just move on
+            # If we don't know how to handle the algorithm, just move on.
+            # This includes private/experimental algorithms
+            # (100 <= raw_pub_algorithm <= 110).
             pass
 
         return offset
@@ -614,7 +616,9 @@ class SecretKeyPacket(PublicKeyPacket):
             # x
             self.exponent_x, offset = get_mpi(self.data, offset)
         else:
-            # If we don't know how to handle the algorithm, just move on
+            # If we don't know how to handle the algorithm, just move on.
+            # This includes private/experimental algorithms
+            # (100 <= raw_pub_algorithm <= 110).
             pass
 
         return offset
