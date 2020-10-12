@@ -1,29 +1,37 @@
+from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+from cryptography.hazmat.backends import default_backend
 from datetime import datetime, timedelta
+import getpass
 import hashlib
 from math import ceil, log
 import re
+import zlib
 
 from .utils import (PgpdumpException, get_int2, get_int4, get_mpi,
-        get_key_id, get_hex_data, get_int_bytes, pack_data)
+                    get_key_id, get_hex_data, get_int_bytes, pack_data)
 
 
 class Packet(object):
     '''The base packet object containing various fields pulled from the packet
     header as well as a slice of the packet data.'''
-    def __init__(self, raw, name, new, data):
+
+    def __init__(self, raw, name, new, data, original_data, secret_keys, passphrase):
         self.raw = raw
         self.name = name
         self.new = new
         self.length = len(data)
         self.data = data
+        self.original_data = original_data
+        self.secret_keys = secret_keys      # shall secret keys be parsed?
+        self.passphrase = passphrase        # passphrase if provided 
 
         # now let subclasses work their magic
         self.parse()
 
     def parse(self):
-        '''Perform any parsing necessary to populate fields on this packet.
+        """Perform any parsing necessary to populate fields on this packet.
         This method is called as the last step in __init__(). The base class
-        method is a no-op; subclasses should use this as required.'''
+        method is a no-op; subclasses should use this as required."""
         return 0
 
     def __repr__(self):
@@ -31,15 +39,15 @@ class Packet(object):
         if self.new:
             new = "new"
         return "<%s: %s (%d), %s, length %d>" % (
-                self.__class__.__name__, self.name, self.raw, new, self.length)
+            self.__class__.__name__, self.name, self.raw, new, self.length)
 
 
 class AlgoLookup(object):
-    '''Mixin class containing algorithm lookup methods.'''
+    """Mixin class containing algorithm lookup methods."""
     pub_algorithms = {
-        1:  "RSA Encrypt or Sign",
-        2:  "RSA Encrypt-Only",
-        3:  "RSA Sign-Only",
+        1: "RSA Encrypt or Sign",
+        2: "RSA Encrypt-Only",
+        3: "RSA Sign-Only",
         16: "ElGamal Encrypt-Only",
         17: "DSA Digital Signature Algorithm",
         18: "Elliptic Curve",
@@ -55,59 +63,111 @@ class AlgoLookup(object):
             return "Private/Experimental algorithm"
         return cls.pub_algorithms.get(alg, "Unknown")
 
-    hash_algorithms = {
-        1:  "MD5",
-        2:  "SHA1",
-        3:  "RIPEMD160",
-        8:  "SHA256",
-        9:  "SHA384",
-        10: "SHA512",
-        11: "SHA224",
+    # TODO: Add more OIDS.
+    # raw_oid: (oid, curve name, bitlen)
+    oids = {
+        b'2B81040023':
+            ([0x2B, 0x81, 0x04, 0x00, 0x23], "NIST P-521", 521),
+        b'2B81040022':
+            ([0x2B, 0x81, 0x04, 0x00, 0x22], "NIST P-384", 384),
+        b'2A8648CE3D030107':
+            ([0x2A, 0x86, 0x48, 0xCE, 0x3D, 0x03, 0x01, 0x07], "NIST P-256", 256),
+        b'2B240303020801010D':
+            ([0x2B, 0x24, 0x03, 0x03, 0x02, 0x08, 0x01, 0x01, 0x0D], "Brainpool P512 r1", 512),
+        b'2B240303020801010B':
+            ([0x2b, 0x24, 0x03, 0x03, 0x02, 0x08, 0x01, 0x01, 0x0b], "Brainpool P384 r1", 384),
+        b'2B2403030208010107':
+            ([0x2b, 0x24, 0x03, 0x03, 0x02, 0x08, 0x01, 0x01, 0x07], "Brainpool P256 r1", 256),
+        b'2B06010401DA470F01': (None, "Curve 25519", None)
     }
 
     @classmethod
-    def lookup_hash_algorithm(cls, alg):
+    def _lookup_oid(cls, oid):
+        return cls.oids.get(oid, ("Unknown", None))
+
+    @classmethod
+    def lookup_oid(cls, oid):
+        return cls._lookup_oid(oid)[0]
+
+    @classmethod
+    def lookup_oid_curve(cls, oid):
+        return cls._lookup_oid(oid)[1]
+
+    @classmethod
+    def lookup_oid_bitlen(cls, oid):
+        return cls._lookup_oid(oid)[2]
+
+    hash_algorithms = {
+        # (Name, hashlib function)
+        1: ("MD5", hashlib.md5),
+        2: ("SHA1", hashlib.sha1),
+        3: ("RIPEMD160", None),
+        8: ("SHA256", hashlib.sha256),
+        9: ("SHA384", hashlib.sha384),
+        10: ("SHA512", hashlib.sha512),
+        11: ("SHA224", hashlib.sha224),
+    }
+
+    @classmethod
+    def _lookup_hash_algorithm(cls, alg):
         # reserved values check
         if alg in (4, 5, 6, 7):
-            return "Reserved"
+            return ("Reserved", None)
         if 100 <= alg <= 110:
-            return "Private/Experimental algorithm"
-        return cls.hash_algorithms.get(alg, "Unknown")
+            return ("Private/Experimental algorithm", None)
+        return cls.hash_algorithms.get(alg, ("Unknown", None))
+
+    @classmethod
+    def lookup_hash_algorithm(cls, alg):
+        return cls._lookup_hash_algorithm(alg)[0]
+
+    @classmethod
+    def lookup_hash_algorithm_func(cls, alg):
+        return cls._lookup_hash_algorithm(alg)[1]
+
 
     sym_algorithms = {
-        # (Name, IV length)
-        0:  ("Plaintext or unencrypted", 0),
-        1:  ("IDEA", 8),
-        2:  ("Triple-DES", 8),
-        3:  ("CAST5", 8),
-        4:  ("Blowfish", 8),
-        5:  ("Reserved", 8),
-        6:  ("Reserved", 8),
-        7:  ("AES with 128-bit key", 16),
-        8:  ("AES with 192-bit key", 16),
-        9:  ("AES with 256-bit key", 16),
-        10: ("Twofish with 256-bit key", 16),
-        11: ("Camellia with 128-bit key", 16),
-        12: ("Camellia with 192-bit key", 16),
-        13: ("Camellia with 256-bit key", 16),
+        # (Name, class of cryptography lib, IV length, key size)
+        0: ("Plaintext or unencrypted", None, 0, 0),
+        1: ("IDEA", algorithms.IDEA, 8, 128),
+        2: ("Triple-DES", algorithms.TripleDES, 8, 168),
+        3: ("CAST5", algorithms.CAST5, 8, 128),
+        4: ("Blowfish", algorithms.Blowfish, 8, 128),
+        5: ("Reserved", None, 0, 0),
+        6: ("Reserved", None, 0, 0),
+        7: ("AES with 128-bit key", algorithms.AES, 16, 128),
+        8: ("AES with 192-bit key", algorithms.AES, 16, 192),
+        9: ("AES with 256-bit key", algorithms.AES, 16, 256),
+        10: ("Twofish with 256-bit key", None, 16, 256), # not supported by cryptography
+        11: ("Camellia with 128-bit key", algorithms.Camellia, 16, 128),
+        12: ("Camellia with 192-bit key", algorithms.Camellia, 16, 192),
+        13: ("Camellia with 256-bit key", algorithms.Camellia, 16, 256),
     }
 
     @classmethod
     def _lookup_sym_algorithm(cls, alg):
-        return cls.sym_algorithms.get(alg, ("Unknown", 0))
+        return cls.sym_algorithms.get(alg, ("Unknown", None, 0, 0))
 
     @classmethod
     def lookup_sym_algorithm(cls, alg):
         return cls._lookup_sym_algorithm(alg)[0]
 
     @classmethod
-    def lookup_sym_algorithm_iv(cls, alg):
+    def lookup_sym_algorithm_type(cls, alg):
         return cls._lookup_sym_algorithm(alg)[1]
+
+    @classmethod
+    def lookup_sym_algorithm_iv(cls, alg):
+        return cls._lookup_sym_algorithm(alg)[2]
+
+    @classmethod
+    def lookup_sym_algorithm_size(cls, alg):
+        return cls._lookup_sym_algorithm(alg)[3]
 
 
 class SignatureSubpacket(object):
-    '''A signature subpacket containing a type, type name, some flags, and the
-    contained data.'''
+    """A signature subpacket containing a type, type name, some flags, and the
+    contained data."""
     CRITICAL_BIT = 0x80
     CRITICAL_MASK = 0x7f
 
@@ -120,13 +180,13 @@ class SignatureSubpacket(object):
         self.data = data
 
     subpacket_types = {
-        2:  "Signature Creation Time",
-        3:  "Signature Expiration Time",
-        4:  "Exportable Certification",
-        5:  "Trust Signature",
-        6:  "Regular Expression",
-        7:  "Revocable",
-        9:  "Key Expiration Time",
+        2: "Signature Creation Time",
+        3: "Signature Expiration Time",
+        4: "Exportable Certification",
+        5: "Trust Signature",
+        6: "Regular Expression",
+        7: "Revocable",
+        9: "Key Expiration Time",
         10: "Placeholder for backward compatibility",
         11: "Preferred Symmetric Algorithms",
         12: "Revocation Key",
@@ -160,7 +220,7 @@ class SignatureSubpacket(object):
         if self.critical:
             extra += "critical, "
         return "<%s: %s, %slength %d>" % (
-                self.__class__.__name__, self.name, extra, self.length)
+            self.__class__.__name__, self.name, extra, self.length)
 
 
 class SignaturePacket(Packet, AlgoLookup):
@@ -178,6 +238,10 @@ class SignaturePacket(Packet, AlgoLookup):
         self.fingerprint_version = None
         self.hash2 = None
         self.subpackets = []
+        self.key_flags = []
+
+        self.sig_data = None
+
         super(SignaturePacket, self).__init__(*args, **kwargs)
 
     def parse(self):
@@ -202,7 +266,7 @@ class SignaturePacket(Packet, AlgoLookup):
 
             self.raw_creation_time = get_int4(self.data, offset)
             self.creation_time = datetime.utcfromtimestamp(
-                    self.raw_creation_time)
+                self.raw_creation_time)
             offset += 4
 
             self.key_id = get_key_id(self.data, offset)
@@ -246,9 +310,11 @@ class SignaturePacket(Packet, AlgoLookup):
 
             self.hash2 = self.data[offset:offset + 2]
             offset += 2
+
+            self.sig_data, offset = get_mpi(self.data, offset)
         else:
             raise PgpdumpException("Unsupported signature packet, version %d" %
-                    self.sig_version)
+                                   self.sig_version)
 
         return offset
 
@@ -268,17 +334,29 @@ class SignaturePacket(Packet, AlgoLookup):
             sub_data = self.data[offset:offset + sub_len]
             if len(sub_data) != sub_len:
                 raise PgpdumpException(
-                        "Unexpected subpackets length: expected %d, got %d" % (
-                            sub_len, len(sub_data)))
+                    "Unexpected subpackets length: expected %d, got %d" % (
+                        sub_len, len(sub_data)))
             subpacket = SignatureSubpacket(subtype, hashed, sub_data)
             if subpacket.subtype == 2:
                 self.raw_creation_time = get_int4(subpacket.data, 0)
                 self.creation_time = datetime.utcfromtimestamp(
-                        self.raw_creation_time)
+                    self.raw_creation_time)
             elif subpacket.subtype == 3:
                 self.raw_expiration_time = get_int4(subpacket.data, 0)
             elif subpacket.subtype == 16:
                 self.key_id = get_key_id(subpacket.data, 0)
+            elif subpacket.subtype == 27: # See 5.2.3.21 of RFC4880
+                flags = {
+                    0x01: "C", # Certify other keys
+                    0x02: "S", # Sign data
+                    #0x04: "E", # Encrypt communications
+                    #0x08: "E", # Encrypt storage
+                    0x0c: "E", # Encrypt communications or storage
+                    0x20: "A", # Authenticate
+                }
+                for key, flag in flags.items():
+                    if subpacket.data[0] & key:
+                        self.key_flags.append(flag)
             elif subpacket.subtype == 33:
                 self.fingerprint_version = int(subpacket.data[0])
                 self.fingerprint = get_hex_data(subpacket.data, 1, len(subpacket.data))
@@ -287,7 +365,7 @@ class SignaturePacket(Packet, AlgoLookup):
 
         if self.raw_expiration_time:
             self.expiration_time = self.creation_time + timedelta(
-                    seconds=self.raw_expiration_time)
+                seconds=self.raw_expiration_time)
 
     sig_types = {
         0x00: "Signature of a binary document",
@@ -321,8 +399,8 @@ class SignaturePacket(Packet, AlgoLookup):
 
     def __repr__(self):
         return "<%s: %s, %s, length %d>" % (
-                self.__class__.__name__, self.pub_algorithm,
-                self.hash_algorithm, self.length)
+            self.__class__.__name__, self.pub_algorithm,
+            self.hash_algorithm, self.length)
 
 
 class PublicKeyPacket(Packet, AlgoLookup):
@@ -336,13 +414,24 @@ class PublicKeyPacket(Packet, AlgoLookup):
         self.expiration_time = None
         self.raw_pub_algorithm = None
         self.pub_algorithm_type = None
-        self.modulus = None
-        self.modulus_bitlen = None
-        self.exponent = None
+        self.bitlen = None
+        # dsa information
         self.prime = None
         self.group_order = None
         self.group_gen = None
         self.key_value = None
+        # rsa information
+        self.modulus = None
+        self.modulus_bitlen = None
+        self.exponent = None
+        # ecc information
+        self.raw_oid = None
+        self.oid = None
+        self.curve = None
+        self.point_q = None
+        self.kdf_hash = None
+        self.kdf_wrapalgo = None
+
         super(PublicKeyPacket, self).__init__(*args, **kwargs)
 
     def parse(self):
@@ -351,14 +440,14 @@ class PublicKeyPacket(Packet, AlgoLookup):
         if self.pubkey_version in (2, 3):
             self.raw_creation_time = get_int4(self.data, offset)
             self.creation_time = datetime.utcfromtimestamp(
-                    self.raw_creation_time)
+                self.raw_creation_time)
             offset += 4
 
             self.raw_days_valid = get_int2(self.data, offset)
             offset += 2
             if self.raw_days_valid > 0:
                 self.expiration_time = self.creation_time + timedelta(
-                        days=self.raw_days_valid)
+                    days=self.raw_days_valid)
 
             self.raw_pub_algorithm = self.data[offset]
             offset += 1
@@ -381,28 +470,34 @@ class PublicKeyPacket(Packet, AlgoLookup):
                 md5.update(get_int_bytes(self.group_gen))
             else:
                 raise PgpdumpException("Invalid non-RSA v%d public key" %
-                        self.pubkey_version)
+                                       self.pubkey_version)
             self.fingerprint = md5.hexdigest().upper().encode('ascii')
         elif self.pubkey_version == 4:
-            sha1 = hashlib.sha1()
-            seed_bytes = (0x99, (self.length >> 8) & 0xff, self.length & 0xff)
-            sha1.update(pack_data(bytearray(seed_bytes)))
-            sha1.update(pack_data(self.data))
-            self.fingerprint = sha1.hexdigest().upper().encode('ascii')
-            self.key_id = self.fingerprint[24:]
-
             self.raw_creation_time = get_int4(self.data, offset)
             self.creation_time = datetime.utcfromtimestamp(
-                    self.raw_creation_time)
+                self.raw_creation_time)
             offset += 4
 
             self.raw_pub_algorithm = self.data[offset]
             offset += 1
 
             offset = self.parse_key_material(offset)
+
+            # create fingerprint based on
+            # https://tools.ietf.org/html/rfc4880#section-12.2
+            # current offset is the length of the pubkey packet
+            # (returned by self.parse_key_material)
+            # self.length may be longer because of secret key material!
+            pub_packet_length = offset
+            sha1 = hashlib.sha1()
+            seed_bytes = (0x99, (pub_packet_length >> 8) & 0xff, pub_packet_length & 0xff)
+            sha1.update(pack_data(bytearray(seed_bytes)))
+            sha1.update(pack_data(self.data[:pub_packet_length]))
+            self.fingerprint = sha1.hexdigest().upper().encode('ascii')
+            self.key_id = self.fingerprint[24:]
         else:
             raise PgpdumpException("Unsupported public key packet, version %d" %
-                    self.pubkey_version)
+                                   self.pubkey_version)
 
         return offset
 
@@ -414,6 +509,7 @@ class PublicKeyPacket(Packet, AlgoLookup):
             self.exponent, offset = get_mpi(self.data, offset)
             # the length of the modulus in bits
             self.modulus_bitlen = int(ceil(log(self.modulus, 2)))
+            self.bitlen = self.modulus_bitlen
         elif self.raw_pub_algorithm == 17:
             self.pub_algorithm_type = "dsa"
             # p, q, g, y
@@ -421,17 +517,64 @@ class PublicKeyPacket(Packet, AlgoLookup):
             self.group_order, offset = get_mpi(self.data, offset)
             self.group_gen, offset = get_mpi(self.data, offset)
             self.key_value, offset = get_mpi(self.data, offset)
+            # This isn't always accurate, but you can round to the nearest power of 2 yourself.
+            self.bitlen = int(ceil(log(self.key_value, 2)))
         elif self.raw_pub_algorithm in (16, 20):
             self.pub_algorithm_type = "elg"
             # p, g, y
             self.prime, offset = get_mpi(self.data, offset)
             self.group_gen, offset = get_mpi(self.data, offset)
             self.key_value, offset = get_mpi(self.data, offset)
+        elif self.raw_pub_algorithm == 18:
+            self.pub_algorithm_type = "ecdh"
+            offset = self.parse_oid_data(offset)
+            self.point_q, offset = get_mpi(self.data, offset)
+            offset = self.parse_kdf(offset)
+        elif self.raw_pub_algorithm == 19:
+            self.pub_algorithm_type = "ecdsa"
+            offset = self.parse_oid_data(offset)
+            self.point_q, offset = get_mpi(self.data, offset)
+        elif self.raw_pub_algorithm == 22:
+            self.pub_algorithm_type = "curve25519"
+            offset = self.parse_oid_data(offset)
+            #self.point_q, offset = get_mpi(self.data, offset)
+            # TODO Look for specifics of curve25519 if any
         else:
             # If we don't know how to handle the algorithm, just move on.
             # This includes private/experimental algorithms
             # (100 <= raw_pub_algorithm <= 110).
             pass
+
+        return offset
+
+    def parse_oid_data(self, offset):
+        # see https://tools.ietf.org/html/rfc6637#section-9
+        oid_length = self.data[offset]
+        offset += 1
+
+        oid = get_hex_data(self.data, offset, oid_length)
+        offset += oid_length
+
+        self.raw_oid = oid
+        self.oid = self.lookup_oid(oid)
+        self.curve = self.lookup_oid_curve(oid)
+        self.bitlen = self.lookup_oid_bitlen(oid)
+
+        return offset
+
+    def parse_kdf(self, offset):
+        # see https://tools.ietf.org/html/rfc6637#section-9
+        kdf_length = self.data[offset]
+        offset += 1
+        offset += 1 # reserved for future extensions
+
+        hash_id = self.data[offset]
+        self.kdf_hash = self.lookup_hash_algorithm(hash_id)
+        offset += 1
+
+        wrapalgo_id = self.data[offset]
+        self.kdf_wrapalgo = self.lookup_sym_algorithm(wrapalgo_id)
+        offset += 1
 
         return offset
 
@@ -441,13 +584,13 @@ class PublicKeyPacket(Packet, AlgoLookup):
 
     def __repr__(self):
         return "<%s: 0x%s, %s, length %d>" % (
-                self.__class__.__name__, self.key_id.decode('ascii'),
-                self.pub_algorithm, self.length)
+            self.__class__.__name__, self.key_id.decode('ascii'),
+            self.pub_algorithm, self.length)
 
 
 class PublicSubkeyPacket(PublicKeyPacket):
-    '''A Public-Subkey packet (tag 14) has exactly the same format as a
-    Public-Key packet, but denotes a subkey.'''
+    """A Public-Subkey packet (tag 14) has exactly the same format as a
+    Public-Key packet, but denotes a subkey."""
     pass
 
 
@@ -465,8 +608,14 @@ class SecretKeyPacket(PublicKeyPacket):
         self.s2k_id = None
         self.s2k_type = None
         self.s2k_cipher = None
+        self.s2k_cipher_obj = None
+        self.s2k_cipher_size = None
         self.s2k_hash = None
+        self.s2k_hash_func = None
+        self.s2k_count = None
+        self.s2k_salt = None
         self.s2k_iv = None
+        self.s2k_key = None
         self.checksum = None
         self.serial_number = None
         # RSA fields
@@ -476,6 +625,9 @@ class SecretKeyPacket(PublicKeyPacket):
         self.multiplicative_inverse = None
         # DSA and Elgamal
         self.exponent_x = None
+        # EC field
+        self.private_d = None
+
         super(SecretKeyPacket, self).__init__(*args, **kwargs)
 
     @classmethod
@@ -492,14 +644,17 @@ class SecretKeyPacket(PublicKeyPacket):
 
         if self.s2k_id == 0:
             # plaintext key data
-            offset = self.parse_private_key_material(offset)
+            offset += self.parse_private_key_material(self.data[offset:])
             self.checksum = get_int2(self.data, offset)
             offset += 2
+
         elif self.s2k_id in (254, 255):
             # encrypted key data
             cipher_id = self.data[offset]
             offset += 1
             self.s2k_cipher = self.lookup_sym_algorithm(cipher_id)
+            self.s2k_cipher_obj = self.lookup_sym_algorithm_type(cipher_id)
+            self.s2k_cipher_size = self.lookup_sym_algorithm_size(cipher_id)
 
             # s2k_length is the len of the entire S2K specifier, as per
             # section 3.7.1 in RFC 4880
@@ -507,43 +662,77 @@ class SecretKeyPacket(PublicKeyPacket):
             # octects we've parsed matches the expected length of the s2k
             offset_before_s2k = offset
 
+            # type id
             s2k_type_id = self.data[offset]
             offset += 1
             name, s2k_length = self.lookup_s2k(s2k_type_id)
             self.s2k_type = name
 
+            # hash algorithm
+            hash_id = self.data[offset]
+            offset += 1
+            self.s2k_hash = self.lookup_hash_algorithm(hash_id)
+            self.s2k_hash_func = self.lookup_hash_algorithm_func(hash_id)
             has_iv = True
+
+            # simple string-to-key
             if s2k_type_id == 0:
-                # simple string-to-key
-                hash_id = self.data[offset]
-                offset += 1
-                self.s2k_hash = self.lookup_hash_algorithm(hash_id)
+                # calculate session key if secret keys should be parsed too
+                if self.secret_keys:
+                    if self.passphrase is None:
+                        passphrase = getpass.getpass("Please provide passphrase: ")
+                    else:
+                        passphrase = self.passphrase
+                    passphrase = passphrase.encode('utf-8')
+                    self.s2k_key = self.calculate_session_key(passphrase)
 
+            # salted string-to-key
             elif s2k_type_id == 1:
-                # salted string-to-key
-                hash_id = self.data[offset]
-                offset += 1
-                self.s2k_hash = self.lookup_hash_algorithm(hash_id)
-                # ignore 8 bytes
+                # salt
+                self.s2k_salt = self.data[offset:offset+8]
                 offset += 8
+                # calculate session key if secret keys should be parsed too
+                if self.secret_keys:
+                    if self.passphrase is None:
+                        passphrase = getpass.getpass("Please provide passphrase: ")
+                    else:
+                        passphrase = self.passphrase
+                    passphrase = passphrase.encode('utf-8')
+                    hashinput = self.s2k_salt + passphrase.encode('utf-8')
+                    self.s2k_key = self.calculate_session_key(hashinput)
 
+            # reserved
             elif s2k_type_id == 2:
-                # reserved
                 pass
 
+            # iterated and salted
             elif s2k_type_id == 3:
-                # iterated and salted
-                hash_id = self.data[offset]
-                offset += 1
-                self.s2k_hash = self.lookup_hash_algorithm(hash_id)
-                # ignore 8 bytes
+                # salt
+                self.s2k_salt = self.data[offset:offset+8]
                 offset += 8
-                # ignore count
+                # count, see https://tools.ietf.org/html/rfc4880#section-3.7.1.3
+                c = self.data[offset]
+                self.s2k_count = (16 + (c & 15)) << ((c >> 4) + 6)
                 offset += 1
-                # TODO: parse and store count ?
+                # calculate session key if secret keys should be parsed too
+                if self.secret_keys:
+                    if self.passphrase is None:
+                        passphrase = getpass.getpass("Please provide passphrase: ")
+                    else:
+                        passphrase = self.passphrase
+                    passphrase = passphrase.encode('utf-8')
+                    # again, see https://tools.ietf.org/html/rfc4880#section-3.7.1.3
+                    hashinput = bytearray(self.s2k_salt + passphrase)
+                    # if count is less than the size of salt + passphrase we take
+                    # both as hashinput (without cutting)
+                    if not self.s2k_count < len(self.s2k_salt + passphrase):
+                        while(len(hashinput) <= self.s2k_count):
+                            hashinput += bytearray(self.s2k_salt + passphrase)
+                        hashinput = hashinput[:self.s2k_count]
+                    self.s2k_key = self.calculate_session_key(bytes(hashinput))
 
+            # GnuPG string-to-key
             elif 100 <= s2k_type_id <= 110:
-                # GnuPG string-to-key
                 # According to g10/parse-packet.c near line 1832, the 101 packet
                 # type is a special GnuPG extension.  This S2K extension is
                 # 6 bytes in total:
@@ -552,69 +741,155 @@ class SecretKeyPacket(PublicKeyPacket):
                 #   Octet 1:   hash algorithm
                 #   Octet 2-4: "GNU"
                 #   Octet 5:   mode integer
-                hash_id = self.data[offset]
-                offset += 1
-                self.s2k_hash = self.lookup_hash_algorithm(hash_id)
 
                 gnu = self.data[offset:offset + 3]
                 offset += 3
                 if gnu != bytearray(b"GNU"):
                     raise PgpdumpException(
-                            "S2K parsing error: expected 'GNU', got %s" % gnu)
+                        "S2K parsing error: expected 'GNU', got %s" % gnu)
 
                 mode = self.data[offset]
                 mode += 1000
                 offset += 1
                 if mode == 1001:
                     has_iv = False
+                    return offset
                 elif mode == 1002:
                     has_iv = False
 
                     serial_len = self.data[offset]
                     if serial_len < 0:
                         raise PgpdumpException(
-                                "Unexpected serial number length: %d" %
-                                serial_len)
+                            "Unexpected serial number length: %d" %
+                            serial_len)
 
                     self.serial_number = get_hex_data(self.data, offset + 1,
-                            serial_len)
+                                                      serial_len)
+                    return offset
                 else:
-                    # TODO implement other modes?
                     raise PgpdumpException(
-                            "Unsupported GnuPG S2K extension, encountered mode %d" % mode)
+                        "Unsupported GnuPG S2K extension, encountered mode %d" % mode)
             else:
                 raise PgpdumpException(
-                        "Unsupported S2K algorithm %d" % s2k_type_id)
+                    "Unsupported S2k algorithm %d" % s2k_type_id)
 
             if s2k_length != (offset - offset_before_s2k):
                 raise PgpdumpException(
-                        "Error parsing string-to-key specifier, mismatched length")
+                    "Error parsing string-to-key specifier, mismatched length")
 
             if has_iv:
                 s2k_iv_len = self.lookup_sym_algorithm_iv(cipher_id)
                 self.s2k_iv = self.data[offset:offset + s2k_iv_len]
                 offset += s2k_iv_len
 
-            # TODO decrypt key data
-            # TODO parse checksum
-            return offset
+            # parse key data
+            offset += self.parse_private_key_material(self.data[offset:])
 
-    def parse_private_key_material(self, offset):
+        # Simple S2K algorithm using MD5 hash, skipping
+        # See https://tools.ietf.org/html/rfc4880#section-3.7.2.1
+        else:
+            raise PgpdumpException(
+                "Unsupported key encryption %d" % self.s2k_id)
+
+        return offset
+
+    def calculate_session_key(self, hashinput):
+        '''calculate session key as described in
+        https://tools.ietf.org/html/rfc4880#section-3.7.1.1 '''
+        hashed = self.s2k_hash_func()
+        hashed.update(hashinput)
+        hashed = hashed.digest()
+        counter = 1 # instances already hashed
+
+        # as we use bytearrays, we need byte length instead of bit size
+        key_byte_length = (self.s2k_cipher_size + 7) // 8
+
+        while(len(hashed) < key_byte_length):
+            # hash again but with preloaded zero bytes
+            newhashed = self.s2k_hash_func()
+            newhashed.update(bytes(counter))
+            newhashed.update(hashinput)
+
+            # add to previous hash(es)
+            hashed += newhashed.digest()
+            counter += 1
+
+        # truncate to session key size
+        sessionkey = hashed[:key_byte_length]
+        return sessionkey
+
+    def decrypt_key_material(self, data):
+        if (self.pubkey_version == 4):
+            # decrypt key material using CFB mode
+            # see https://tools.ietf.org/html/rfc4880#section-13.9
+            algorithm = self.s2k_cipher_obj(self.s2k_key)
+            mode = modes.CFB(self.s2k_iv)
+            backend = default_backend()
+            cipher = Cipher(algorithm, mode, backend)
+            decryptor = cipher.decryptor()
+            plaintext = decryptor.update(data) + decryptor.finalize()
+
+            # verify successful decryption based on checksum
+            # see https://tools.ietf.org/html/rfc4880#section-5.5.3
+            if self.s2k_id == 255:
+                self.checksum = get_int2(plaintext, len(plaintext)-2)
+                checksum = len(plaintext)-2 % 65536
+            elif self.s2k_id == 254:
+                self.checksum = plaintext[(len(plaintext)-20):]
+                checksum = hashlib.sha1()
+                checksum.update(pack_data(plaintext[:(len(plaintext)-20)]))
+            if self.checksum == checksum.digest():
+                return plaintext
+            # plaintext could not be verified
+            else:
+                print("Could not decrypt key material! Procced without parsing.")
+                return None
+        else:
+            # V3 keys are not supported by GnuPG since 2.1 because of security reasons
+            # If one wishs to implement them nevertheless, start here...
+            # "With V3 keys, the MPI bit count prefix (i.e., the first two octets) 
+            # is not encrypted.  Only the MPI non-prefix data is encrypted."
+            # See https://tools.ietf.org/html/rfc4880#section-5.5.3 '''
+
+            print("Can not decrypt key material: Only OpenPGP keys v4 are supported.")
+            return None
+
+    def parse_private_key_material(self, data):
+        offset = 0 # parse mpi data and remember length of all key material
+
+        # if a key is present, try to decrypt key material and proceed parsing
+        if self.s2k_key:
+            data = self.decrypt_key_material(data)
+            if data is None: # key material could not be decrypted, stop parsing
+                return 0
+        elif self.s2k_id > 0: # returns if key material is encrypted but no key is present
+            return 0
+
+        # parse data
         if self.raw_pub_algorithm in (1, 2, 3):
             self.pub_algorithm_type = "rsa"
             # d, p, q, u
-            self.exponent_d, offset = get_mpi(self.data, offset)
-            self.prime_p, offset = get_mpi(self.data, offset)
-            self.prime_q, offset = get_mpi(self.data, offset)
-            self.multiplicative_inverse, offset = get_mpi(self.data, offset)
+            self.exponent_d, offset = get_mpi(data, offset)
+            self.prime_p, offset = get_mpi(data, offset)
+            self.prime_q, offset = get_mpi(data, offset)
+            self.multiplicative_inverse, offset = get_mpi(data, offset)
         elif self.raw_pub_algorithm == 17:
             self.pub_algorithm_type = "dsa"
             # x
-            self.exponent_x, offset = get_mpi(self.data, offset)
+            self.exponent_x, offset = get_mpi(data, offset)
         elif self.raw_pub_algorithm in (16, 20):
             self.pub_algorithm_type = "elg"
             # x
-            self.exponent_x, offset = get_mpi(self.data, offset)
+            self.exponent_x, offset = get_mpi(data, offset)
+        elif self.raw_pub_algorithm == 18:
+            self.pub_algorithm_type = "ecdh"
+            self.private_d, offset = get_mpi(data, offset)
+        elif self.raw_pub_algorithm == 19:
+            self.pub_algorithm_type = "ecdsa"
+            self.private_d, offset = get_mpi(data, offset)
+        elif self.raw_pub_algorithm == 22:
+            self.pub_algorithm_type = "curve25519"
+            # TODO lookup curve25519 specific stuff
         else:
             # If we don't know how to handle the algorithm, just move on.
             # This includes private/experimental algorithms
@@ -634,6 +909,7 @@ class UserIDPacket(Packet):
     '''A User ID packet consists of UTF-8 text that is intended to represent
     the name and email address of the key holder. By convention, it includes an
     RFC 2822 mail name-addr, but there are no restrictions on its content.'''
+
     def __init__(self, *args, **kwargs):
         self.user = None
         self.user_name = None
@@ -655,8 +931,8 @@ class UserIDPacket(Packet):
 
     def __repr__(self):
         return "<%s: %r (%r), length %d>" % (
-                self.__class__.__name__, self.user_name, self.user_email,
-                self.length)
+            self.__class__.__name__, self.user_name, self.user_email,
+            self.length)
 
 
 class UserAttributePacket(Packet):
@@ -702,8 +978,8 @@ class TrustPacket(Packet):
         super(TrustPacket, self).__init__(*args, **kwargs)
 
     def parse(self):
-        '''GnuPG public keyrings use a 2-byte trust value that appears to be
-        integer values into some internal enumeration.'''
+        """GnuPG public keyrings use a 2-byte trust value that appears to be
+        integer values into some internal enumeration."""
         if self.length == 2:
             self.trust = get_int2(self.data, 0)
             return 2
@@ -717,7 +993,7 @@ class PublicKeyEncryptedSessionKeyPacket(Packet, AlgoLookup):
         self.raw_pub_algorithm = None
         self.pub_algorithm = None
         super(PublicKeyEncryptedSessionKeyPacket, self).__init__(
-                *args, **kwargs)
+            *args, **kwargs)
 
     def parse(self):
         self.session_key_version = self.data[0]
@@ -727,31 +1003,54 @@ class PublicKeyEncryptedSessionKeyPacket(Packet, AlgoLookup):
             self.pub_algorithm = self.lookup_pub_algorithm(self.raw_pub_algorithm)
         else:
             raise PgpdumpException(
-                    "Unsupported encrypted session key packet, version %d" %
-                    self.session_key_version)
+                "Unsupported encrypted session key packet, version %d" %
+                self.session_key_version)
 
         # this is hardcoded to work with the only known session key version
         return 10
 
     def __repr__(self):
         return "<%s: 0x%s (%s), length %d>" % (
-                self.__class__.__name__, self.key_id, self.pub_algorithm,
-                self.length)
+            self.__class__.__name__, self.key_id, self.pub_algorithm,
+            self.length)
+
+
+class CompressedDataPacket(Packet):
+    def __init__(self, *args, **kwargs):
+        self.decompressed_data = None
+        self.raw_compression_algo = None
+        super(CompressedDataPacket, self).__init__(*args, **kwargs)
+
+    def parse(self):
+        offset = super(CompressedDataPacket, self).parse()
+
+        self.raw_compression_algo = self.data[offset]
+        offset += 1
+
+        if self.raw_compression_algo == 1:
+            # ZLIB DEFLATE
+            self.decompressed_data = zlib.decompress(self.data[offset:offset + self.length], -zlib.MAX_WBITS)
+        return self.length
+
+    def __repr__(self):
+        return "<%s: Algo %s, length %s>" % (
+            self.__class__.__name__, self.raw_compression_algo, self.length
+        )
 
 
 TAG_TYPES = {
     # (Name, PacketType) tuples
-    0:  ("Reserved", None),
-    1:  ("Public-Key Encrypted Session Key Packet",
-         PublicKeyEncryptedSessionKeyPacket),
-    2:  ("Signature Packet", SignaturePacket),
-    3:  ("Symmetric-Key Encrypted Session Key Packet", None),
-    4:  ("One-Pass Signature Packet", None),
-    5:  ("Secret Key Packet", SecretKeyPacket),
-    6:  ("Public Key Packet", PublicKeyPacket),
-    7:  ("Secret Subkey Packet", SecretSubkeyPacket),
-    8:  ("Compressed Data Packet", None),
-    9:  ("Symmetrically Encrypted Data Packet", None),
+    0: ("Reserved", None),
+    1: ("Public-Key Encrypted Session Key Packet",
+        PublicKeyEncryptedSessionKeyPacket),
+    2: ("Signature Packet", SignaturePacket),
+    3: ("Symmetric-Key Encrypted Session Key Packet", None),
+    4: ("One-Pass Signature Packet", None),
+    5: ("Secret Key Packet", SecretKeyPacket),
+    6: ("Public Key Packet", PublicKeyPacket),
+    7: ("Secret Subkey Packet", SecretSubkeyPacket),
+    8: ("Compressed Data Packet", CompressedDataPacket),
+    9: ("Symmetrically Encrypted Data Packet", None),
     10: ("Marker Packet", None),
     11: ("Literal Data Packet", None),
     12: ("Trust Packet", TrustPacket),
@@ -768,10 +1067,10 @@ TAG_TYPES = {
 
 
 def new_tag_length(data, start):
-    '''Takes a bytearray of data as input, as well as an offset of where to
+    """Takes a bytearray of data as input, as well as an offset of where to
     look. Returns a derived (offset, length, partial) tuple.
     Reference: http://tools.ietf.org/html/rfc4880#section-4.2.2
-    '''
+    """
     first = data[start]
     offset = length = 0
     partial = False
@@ -802,8 +1101,8 @@ def new_tag_length(data, start):
 
 
 def old_tag_length(data, start):
-    '''Takes a bytearray of data as input, as well as an offset of where to
-    look. Returns a derived (offset, length) tuple.'''
+    """Takes a bytearray of data as input, as well as an offset of where to
+    look. Returns a derived (offset, length) tuple."""
     offset = length = 0
     temp_len = data[start] & 0x03
 
@@ -822,10 +1121,10 @@ def old_tag_length(data, start):
     return (offset, length)
 
 
-def construct_packet(data, header_start):
-    '''Returns a (length, packet) tuple constructed from 'data' at index
+def construct_packet(data, header_start, secret_keys=False, passphrase=None):
+    """Returns a (length, packet) tuple constructed from 'data' at index
     'header_start'. If there is a next packet, it will be found at
-    header_start + length.'''
+    header_start + length."""
 
     # tag encoded in bits 5-0 (new packet format)
     # 0x3f == 111111b
@@ -838,7 +1137,7 @@ def construct_packet(data, header_start):
     if new:
         # length is encoded in the second (and following) octet
         data_offset, data_length, partial = new_tag_length(
-                data, header_start + 1)
+            data, header_start + 1)
     else:
         # tag encoded in bits 5-2, discard bits 1-0
         tag >>= 2
@@ -856,12 +1155,14 @@ def construct_packet(data, header_start):
     # data consumed to create new packet, consists of header and data
     consumed = 0
     packet_data = bytearray()
+    original_data = bytearray()
     while (True):
         consumed += data_offset
 
         data_start = header_start + data_offset
-        header_start = data_start + data_length
-        packet_data += data[data_start:header_start]
+        next_header_start = data_start + data_length
+        original_data += data[header_start:next_header_start]
+        packet_data += data[data_start:next_header_start]
         consumed += data_length
 
         # The new format might encode data with Partial Body Length headers.
@@ -869,8 +1170,11 @@ def construct_packet(data, header_start):
         # last header of a packet is not a Partial Body Length header.
         if partial:
             data_offset, data_length, partial = new_tag_length(
-                    data, header_start)
+                data, next_header_start)
+            header_start = next_header_start
         else:
             break
-    packet = PacketType(tag, name, new, packet_data)
-    return (consumed, packet)
+    packet_data = bytes(packet_data)
+    original_data = bytes(original_data)
+    packet = PacketType(tag, name, new, packet_data, original_data, secret_keys, passphrase)
+    return consumed, packet
