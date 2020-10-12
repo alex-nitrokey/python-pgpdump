@@ -21,5 +21,10 @@ setup(
     url = 'https://github.com/nitrokey-alex/python-pgpdump',
     keywords = 'pgp gpg rfc2440 rfc4880 crypto cryptography',
     classifiers = classifiers,
+    entry_points={
+        'console_scripts': [
+            'pgpdump = pgpdump.__main__:main',
+        ],
+    },
     packages = ['pgpdump']
 )
