@@ -54,6 +54,7 @@ class AlgoLookup(object):
         19: "ECDSA",
         20: "Formerly ElGamal Encrypt or Sign",
         21: "Diffie-Hellman",
+        22: "EdDSA",
     }
 
     @classmethod
@@ -203,6 +204,7 @@ class SignatureSubpacket(object):
         30: "Features",
         31: "Signature Target",
         32: "Embedded Signature",
+        33: "Issuer Fingerprint",
     }
 
     @property
@@ -232,6 +234,8 @@ class SignaturePacket(Packet, AlgoLookup):
         self.raw_expiration_time = None
         self.expiration_time = None
         self.key_id = None
+        self.fingerprint = None
+        self.fingerprint_version = None
         self.hash2 = None
         self.subpackets = []
         self.key_flags = []
@@ -353,6 +357,9 @@ class SignaturePacket(Packet, AlgoLookup):
                 for key, flag in flags.items():
                     if subpacket.data[0] & key:
                         self.key_flags.append(flag)
+            elif subpacket.subtype == 33:
+                self.fingerprint_version = int(subpacket.data[0])
+                self.fingerprint = get_hex_data(subpacket.data, 1, len(subpacket.data))
             offset += sub_len
             self.subpackets.append(subpacket)
 
@@ -532,12 +539,11 @@ class PublicKeyPacket(Packet, AlgoLookup):
             offset = self.parse_oid_data(offset)
             #self.point_q, offset = get_mpi(self.data, offset)
             # TODO Look for specifics of curve25519 if any
-        elif 100 <= self.raw_pub_algorithm <= 110:
-            # Private/Experimental algorithms, just move on
-            pass
         else:
-            raise PgpdumpException("Unsupported public key algorithm %d" %
-                                   self.raw_pub_algorithm)
+            # If we don't know how to handle the algorithm, just move on.
+            # This includes private/experimental algorithms
+            # (100 <= raw_pub_algorithm <= 110).
+            pass
 
         return offset
 
@@ -765,7 +771,7 @@ class SecretKeyPacket(PublicKeyPacket):
                         "Unsupported GnuPG S2K extension, encountered mode %d" % mode)
             else:
                 raise PgpdumpException(
-                    "Unsupported public key algorithm %d" % s2k_type_id)
+                    "Unsupported S2k algorithm %d" % s2k_type_id)
 
             if s2k_length != (offset - offset_before_s2k):
                 raise PgpdumpException(
@@ -884,12 +890,11 @@ class SecretKeyPacket(PublicKeyPacket):
         elif self.raw_pub_algorithm == 22:
             self.pub_algorithm_type = "curve25519"
             # TODO lookup curve25519 specific stuff
-        elif 100 <= self.raw_pub_algorithm <= 110:
-            # Private/Experimental algorithms, just move on
-            pass
         else:
-            raise PgpdumpException("Unsupported public key algorithm %d" %
-                                   self.raw_pub_algorithm)
+            # If we don't know how to handle the algorithm, just move on.
+            # This includes private/experimental algorithms
+            # (100 <= raw_pub_algorithm <= 110).
+            pass
 
         return offset
 
